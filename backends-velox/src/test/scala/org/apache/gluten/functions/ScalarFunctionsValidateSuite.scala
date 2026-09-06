@@ -550,6 +550,65 @@ class ScalarFunctionsValidateSuite extends FunctionsValidateSuite {
     }
   }
 
+  test("map_from_arrays function") {
+    runQueryAndCompare(
+      "select map_from_arrays(array(l_orderkey, l_orderkey + 1), " +
+        "array(l_partkey, l_suppkey)) from lineitem limit 10") {
+      checkGlutenPlan[ProjectExecTransformer]
+    }
+  }
+
+  test("map_from_arrays function with duplicate keys under LAST_WIN") {
+    // The repeated key sits either side of a distinct one, so under LAST_WIN it must
+    // keep its first position and take the last value. The map column checks the value,
+    // and the map_keys column checks the position: GlutenQueryTest.compare matches maps
+    // by key lookup, so entry order is only asserted once projected to an array.
+    withSQLConf(SQLConf.MAP_KEY_DEDUP_POLICY.key -> SQLConf.MapKeyDedupPolicy.LAST_WIN.toString) {
+      runQueryAndCompare(
+        "select map_from_arrays(array(l_orderkey, l_orderkey + 1, l_orderkey), " +
+          "array(l_partkey, l_suppkey, l_linenumber)) as m, " +
+          "map_keys(map_from_arrays(array(l_orderkey, l_orderkey + 1, l_orderkey), " +
+          "array(l_partkey, l_suppkey, l_linenumber))) as k from lineitem limit 10") {
+        checkGlutenPlan[ProjectExecTransformer]
+      }
+    }
+  }
+
+  test("map_from_arrays function with duplicate keys under the default policy") {
+    // Spark defaults to EXCEPTION. Assert the offload separately from the
+    // throw: a bare "Duplicate map key" match would also pass on a JVM
+    // fallback, since Spark raises DUPLICATED_MAP_KEY with its own wording.
+    // This case is also what proves the policy reached native. Native treats
+    // anything other than the literal "EXCEPTION" as LAST_WIN, so a conf that
+    // never arrived would simply not throw here, while the LAST_WIN cases
+    // would still pass on their own.
+    val df = spark.sql(
+      "select map_from_arrays(array(l_orderkey, l_orderkey), " +
+        "array(l_partkey, l_suppkey)) from lineitem limit 10")
+    checkGlutenPlan[ProjectExecTransformer](df)
+    val exception = intercept[SparkException](df.collect())
+    // Velox renders the key in parentheses -- "Duplicate map key (1) was
+    // found." Spark's message has no parenthesis, so this distinguishes a
+    // native throw from a fallback throw.
+    assert(exception.getMessage.contains("Duplicate map key ("))
+  }
+
+  test("map_from_arrays honors a lower-case mapKeyDedupPolicy") {
+    // SQLConf.setConfString validates with the value converter but stores the
+    // raw string, and Gluten forwards getAllConfs rather than getConf, so
+    // native receives "last_win" and not the enum name. Native compares against
+    // the literal "EXCEPTION", so a lower-case LAST_WIN still resolves the way
+    // Spark resolves it. This pins that behaviour against a future change that
+    // starts parsing the value instead of comparing it.
+    withSQLConf(SQLConf.MAP_KEY_DEDUP_POLICY.key -> "last_win") {
+      runQueryAndCompare(
+        "select map_from_arrays(array(l_orderkey, l_orderkey), " +
+          "array(l_partkey, l_suppkey)) from lineitem limit 10") {
+        checkGlutenPlan[ProjectExecTransformer]
+      }
+    }
+  }
+
   test("raise_error, assert_true") {
     runQueryAndCompare("""SELECT assert_true(l_orderkey >= 1), l_orderkey
                          | from lineitem limit 100""".stripMargin) {
