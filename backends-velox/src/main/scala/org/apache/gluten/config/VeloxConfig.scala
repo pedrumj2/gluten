@@ -696,6 +696,16 @@ object VeloxConfig extends ConfigRegistry {
       .booleanConf
       .createWithDefault(true)
 
+  val NATIVE_UDF_WITHOUT_FALLBACK =
+    buildStaticConf("spark.gluten.sql.columnar.backend.velox.nativeUDFWithoutFallback")
+      .doc(
+        "If true, a UDF from udfLibraryPaths can be called by the name it was registered " +
+          "with, so you do not have to write a Java class for it or run CREATE TEMPORARY " +
+          "FUNCTION. In exchange, there is no Java version to fall back to, so any query " +
+          "Gluten cannot run natively will fail instead of running on Spark. Off by default.")
+      .booleanConf
+      .createWithDefault(false)
+
   val CAST_FROM_VARCHAR_ADD_TRIM_NODE =
     buildConf("spark.gluten.velox.castFromVarcharAddTrimNode")
       .doc(
