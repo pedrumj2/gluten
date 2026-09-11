@@ -157,6 +157,7 @@ get_filename_component(VELOX_PROTO_DIR ${VELOX_PROTO_SRC_DIR}/ DIRECTORY)
 set(VELOX_SRCS
     ${VELOX_PROTO_SRCS}
     compute/VeloxBackend.cc
+    compute/VeloxBackendExtension.cc
     compute/VeloxRuntime.cc
     compute/VeloxPlanConverter.cc
     compute/WholeStageResultIterator.cc

@@ -200,6 +200,47 @@ VeloxColumnarToRow
 | spark.gluten.sql.columnar.backend.velox.driver.udfLibraryPaths | Path to the udf/udaf libraries on driver node. Only applicable on yarn-client mode.                         |
 | spark.gluten.sql.columnar.backend.velox.udfAllowTypeConversion | Whether to inject possible `cast` to convert mismatched data types from input to one registered signatures. |
 
+## Registering functions that are linked into the binary
+
+The `udfLibraryPaths` route above `dlopen`s a shared library at runtime. If you build
+your own Gluten distribution and link your Velox functions directly into it, there is no
+library for it to load. Use `registerVeloxBackendExtension` instead:
+
+```cpp
+#include "compute/VeloxBackendExtension.h"
+
+// Somewhere on a path that runs before VeloxBackend::create().
+gluten::registerVeloxBackendExtension(
+    "my-functions", [](const facebook::velox::config::ConfigBase& conf) {
+      myorg::registerMyFunctions(conf.get<std::string>("myorg.function.prefix", "myorg_"));
+    });
+```
+
+Each registered callback runs once during `VeloxBackend::init()`, in registration order,
+after Gluten's own functions and after `udfLibraryPaths` libraries -- so an extension may
+replace a name either of them registered. The callback receives the resolved backend
+config, as above.
+
+A callback is for anything Velox lets you register: scalar and aggregate functions, file
+systems, reader and writer factories, data sinks.
+
+Three things to watch:
+
+- A callback runs **before** Velox's global memory manager is initialized, so it must not
+  allocate and must not call `facebook::velox::memory::memoryManager()`. Register
+  factories and let them construct their objects lazily.
+- Register before `VeloxBackend::create()`. A registration afterwards throws, rather than
+  being silently ignored.
+- If you register from a static initializer, make sure the object file is actually linked
+  in. An object whose only contribution is a static initializer is dropped from a static
+  archive, because nothing references a symbol in it. Call the registration from code
+  already on a live path, or link with `--whole-archive`.
+
+Note this does not by itself make the function's name resolve in Spark SQL. It makes the
+function executable in Velox; Spark's analyzer still needs the name, which you supply the
+usual way -- a Hive UDF with a matching name, or a `FunctionRegistry` entry injected by
+your own Gluten component.
+
 # Pandas UDFs (a.k.a. Vectorized UDFs)
 
 ## Introduction

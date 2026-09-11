@@ -21,6 +21,7 @@
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/executors/task_queue/UnboundedBlockingQueue.h>
 
+#include "compute/VeloxBackendExtension.h"
 #include "compute/delta/DeltaConnector.h"
 #include "operators/functions/RegistrationAllFunctions.h"
 #include "operators/plannodes/RowVectorStream.h"
@@ -276,6 +277,11 @@ void VeloxBackend::init(
   }
 
   initUdf();
+
+  // Runs after registerAllFunctions() and initUdf() so an extension can replace a
+  // name either of them registered, and before initCache() so an extension can
+  // install a file system the cache then uses.
+  initVeloxBackendExtensions(*backendConf_);
 
   // Initialize Velox-side memory manager for current process. The memory manager
   // will be used during spill calls so we don't track it with Spark off-heap memory instead
