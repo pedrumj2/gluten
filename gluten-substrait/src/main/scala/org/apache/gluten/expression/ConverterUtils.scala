@@ -184,10 +184,14 @@ object ConverterUtils extends Logging {
         (DecimalType(precision, scale), isNullable(decimal.getNullability))
       case Type.KindCase.STRUCT =>
         val struct_ = substraitType.getStruct
-        val fields = struct_.getTypesList.asScala.map {
-          typ =>
+        // `names` is optional: a producer that does not set it yields the previous
+        // behaviour of unnamed fields rather than a mismatch.
+        val names = struct_.getNamesList
+        val nameProvided = names.size() == struct_.getTypesCount
+        val fields = struct_.getTypesList.asScala.zipWithIndex.map {
+          case (typ, i) =>
             val (field, nullable) = parseFromSubstraitType(typ)
-            StructField("", field, nullable)
+            StructField(if (nameProvided) names.get(i) else "", field, nullable)
         }
         (StructType(fields.toSeq), isNullable(substraitType.getStruct.getNullability))
       case Type.KindCase.LIST =>

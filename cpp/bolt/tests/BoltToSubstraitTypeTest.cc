@@ -37,6 +37,18 @@ class BoltToSubstraitTypeTest : public ::testing::Test {
         << "Expected: " << type->toString() << ", but got: " << sameType->toString();
   }
 
+  /// Same round trip, but compares with operator== rather than kindEquals so that row
+  /// field names are checked too. kindEquals ignores them, which is why the named rows
+  /// in the `basic` case below passed while the names were being dropped.
+  void testTypeConversionPreservesNames(const TypePtr& type) {
+    SCOPED_TRACE(type->toString());
+
+    google::protobuf::Arena arena;
+    auto substraitType = typeConvertor_->toSubstraitType(arena, type);
+    auto sameType = SubstraitParser::parseType(substraitType);
+    ASSERT_TRUE(*sameType == *type) << "Expected: " << type->toString() << ", but got: " << sameType->toString();
+  }
+
   std::shared_ptr<BoltToSubstraitTypeConvertor> typeConvertor_;
 };
 
@@ -60,6 +72,18 @@ TEST_F(BoltToSubstraitTypeTest, basic) {
   testTypeConversion(ROW({"a", "b", "c"}, {BIGINT(), BOOLEAN(), VARCHAR()}));
   testTypeConversion(ROW({"a", "b", "c"}, {BIGINT(), ROW({"x", "y"}, {BOOLEAN(), VARCHAR()}), REAL()}));
   testTypeConversion(ROW({}, {}));
+}
+
+// A UDF argument whose ROW loses its field names cannot bind in UDFResolver.tryBindStrict,
+// which compares with DataTypeUtils.sameType and so requires the names to match.
+TEST_F(BoltToSubstraitTypeTest, rowFieldNames) {
+  testTypeConversionPreservesNames(ROW({"a", "b", "c"}, {BIGINT(), BOOLEAN(), VARCHAR()}));
+  testTypeConversionPreservesNames(ROW({"a", "b", "c"}, {BIGINT(), ROW({"x", "y"}, {BOOLEAN(), VARCHAR()}), REAL()}));
+}
+
+TEST_F(BoltToSubstraitTypeTest, rowFieldNamesInContainers) {
+  testTypeConversionPreservesNames(ROW({"arr"}, {ARRAY(ROW({"elem"}, {VARCHAR()}))}));
+  testTypeConversionPreservesNames(ROW({"m"}, {MAP(VARCHAR(), ROW({"v"}, {DOUBLE()}))}));
 }
 
 } // namespace gluten

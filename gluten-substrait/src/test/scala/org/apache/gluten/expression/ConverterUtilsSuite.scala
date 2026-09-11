@@ -16,7 +16,7 @@
  */
 package org.apache.gluten.expression
 
-import org.apache.spark.sql.types.{DataType, TimestampType}
+import org.apache.spark.sql.types.{DataType, LongType, StructField, StructType, TimestampType}
 
 import io.substrait.proto.Type
 import org.scalatest.funsuite.AnyFunSuiteLike
@@ -63,5 +63,43 @@ class ConverterUtilsSuite extends AnyFunSuiteLike {
         assert(dataType === timestampNTZType)
         assert(parsedNullable === nullable)
     }
+  }
+
+  private def i64: Type =
+    Type
+      .newBuilder()
+      .setI64(Type.I64.newBuilder().setNullability(Type.Nullability.NULLABILITY_NULLABLE))
+      .build()
+
+  test("Struct with names yields named StructFields") {
+    val proto = Type
+      .newBuilder()
+      .setStruct(
+        Type.Struct
+          .newBuilder()
+          .setNullability(Type.Nullability.NULLABILITY_NULLABLE)
+          .addTypes(i64)
+          .addTypes(i64)
+          .addNames("a")
+          .addNames("b"))
+      .build()
+
+    val (dataType, _) = ConverterUtils.parseFromSubstraitType(proto)
+    assert(dataType === StructType(Seq(StructField("a", LongType), StructField("b", LongType))))
+  }
+
+  test("Struct without names keeps the previous unnamed fields") {
+    val proto = Type
+      .newBuilder()
+      .setStruct(
+        Type.Struct
+          .newBuilder()
+          .setNullability(Type.Nullability.NULLABILITY_NULLABLE)
+          .addTypes(i64)
+          .addTypes(i64))
+      .build()
+
+    val (dataType, _) = ConverterUtils.parseFromSubstraitType(proto)
+    assert(dataType === StructType(Seq(StructField("", LongType), StructField("", LongType))))
   }
 }
