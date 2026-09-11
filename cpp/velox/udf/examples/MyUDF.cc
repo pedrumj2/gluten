@@ -71,6 +71,45 @@ class HiveStringStringRegisterer final : public gluten::UdfRegisterer {
 
 } // namespace hivestringstring
 
+namespace myudfincrement {
+
+template <typename T>
+struct MyUdfIncrementFunction {
+  VELOX_DEFINE_FUNCTION_TYPES(T);
+
+  FOLLY_ALWAYS_INLINE void call(int64_t& result, const int64_t& a) {
+    result = a + 1;
+  }
+};
+
+// name: myudf_increment
+// signatures:
+//    bigint -> bigint
+// type: SimpleFunction
+//
+// Unlike the registerer above, this name is a plain SQL identifier rather than the class name
+// of a Hive UDF, so it is callable directly as `myudf_increment(col)` with no Java counterpart.
+class MyUdfIncrementRegisterer final : public gluten::UdfRegisterer {
+ public:
+  int getNumUdf() override {
+    return 1;
+  }
+
+  void populateUdfEntries(int& index, gluten::UdfEntry* udfEntries) override {
+    udfEntries[index++] = {name_.c_str(), kBigInt, 1, arg_, false, false};
+  }
+
+  void registerSignatures() override {
+    facebook::velox::registerFunction<MyUdfIncrementFunction, int64_t, int64_t>({name_});
+  }
+
+ private:
+  const std::string name_ = "myudf_increment";
+  const char* arg_[1] = {kBigInt};
+};
+
+} // namespace myudfincrement
+
 std::vector<std::shared_ptr<gluten::UdfRegisterer>>& globalRegisters() {
   static std::vector<std::shared_ptr<gluten::UdfRegisterer>> registerers;
   return registerers;
@@ -83,6 +122,7 @@ void setupRegisterers() {
   }
   auto& registerers = globalRegisters();
   registerers.push_back(std::make_shared<hivestringstring::HiveStringStringRegisterer>());
+  registerers.push_back(std::make_shared<myudfincrement::MyUdfIncrementRegisterer>());
   inited = true;
 }
 } // namespace

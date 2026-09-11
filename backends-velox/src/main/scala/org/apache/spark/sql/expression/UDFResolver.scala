@@ -19,13 +19,16 @@ package org.apache.spark.sql.expression
 import org.apache.gluten.backendsapi.velox.VeloxBackendSettings
 import org.apache.gluten.exception.{GlutenException, GlutenNotSupportException}
 import org.apache.gluten.expression._
+import org.apache.gluten.extension.injector.FunctionDescription
 import org.apache.gluten.jni.JniWorkspace
 
 import org.apache.spark.{SparkConf, SparkFiles}
 import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.internal.Logging
+import org.apache.spark.sql.catalyst.FunctionIdentifier
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.{AttributeReference, Cast, Expression, Unevaluable}
+import org.apache.spark.sql.catalyst.analysis.FunctionRegistry
+import org.apache.spark.sql.catalyst.expressions.{AttributeReference, Cast, Expression, ExpressionInfo, Unevaluable}
 import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateFunction
 import org.apache.spark.sql.catalyst.expressions.codegen.{CodegenContext, ExprCode}
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
@@ -336,6 +339,39 @@ object UDFResolver extends Logging {
     SQLConf.get
       .getConfString(VeloxBackendSettings.GLUTEN_VELOX_UDF_ALLOW_TYPE_CONVERSION, "false")
       .toBoolean
+  }
+
+  /**
+   * One Spark function per loaded UDF whose name contains no dot.
+   *
+   * Without this, a UDF loaded from `udfLibraryPaths` is only reachable as a replacement for a
+   * Hive UDF of the same class name, so a function implemented solely in native code needs a
+   * dummy Java class before Spark's analyzer will resolve it. A dotted name is such a class name
+   * rather than a function name, so it is skipped.
+   *
+   * A name is also skipped when it collides with a Spark built-in: the names are unqualified, so
+   * injecting one would redirect that built-in to a native implementation with possibly different
+   * semantics for every query on the session.
+   */
+  def getFunctionDescriptions: Seq[FunctionDescription] = {
+    val (shadowing, injectable) = UDFNames.toSeq
+      .filterNot(_.contains("."))
+      .sorted
+      .partition(name => FunctionRegistry.builtin.functionExists(FunctionIdentifier(name)))
+
+    shadowing.foreach(
+      name =>
+        logWarning(
+          s"Not registering UDF '$name' by name: it shadows a Spark built-in. " +
+            s"Rename it in the UDF library to call it directly."))
+
+    injectable.map {
+      name =>
+        (
+          FunctionIdentifier(name),
+          new ExpressionInfo(classOf[UDFExpression].getName, name),
+          (children: Seq[Expression]) => getUdfExpression(name, name)(children))
+    }
   }
 
   def getUdfExpression(name: String, alias: String)(children: Seq[Expression]): UDFExpression = {

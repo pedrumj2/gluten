@@ -11,9 +11,15 @@ parent: /developer-overview/
 
 Velox backend supports User-Defined Functions (UDF) and User-Defined Aggregate Functions (UDAF).
 Users can implement custom functions using the UDF interface provided by Velox and compile them into libraries.
-At runtime, these UDFs are registered alongside their Java implementations via `CREATE TEMPORARY FUNCTION`.
+At runtime, a UDF whose name contains no dot is callable directly, with no Java counterpart.
+A UDF named after a Hive UDF class is instead registered alongside that Java implementation
+via `CREATE TEMPORARY FUNCTION`, and replaces it during execution.
 Once registered, Gluten can parse and offload these UDFs to Velox during execution, 
 meanwhile ensuring proper fallback to Java UDFs when necessary.
+
+A UDF whose name matches a Spark built-in is not registered by name; a warning is logged and
+the built-in keeps its meaning. UDAFs are not registered by name and still need
+`CREATE TEMPORARY FUNCTION`.
 Registered UDAFs can be used both as regular aggregate functions and as aggregate window functions.
 
 ## Create and Build UDF/UDAF library
@@ -180,6 +186,14 @@ Time taken: 0.047 seconds
 spark-sql (default)> select hive_string_string(col1, 'world') from tbl;
 hello world
 Time taken: 1.217 seconds, Fetched 1 row(s)
+```
+
+`myudf_increment` in the same example library has a plain name, so it needs no jar on the
+classpath and no `CREATE TEMPORARY FUNCTION`. Its argument is a `bigint`:
+
+```
+spark-sql (default)> create table nums as select * from values (1L);
+spark-sql (default)> select myudf_increment(col1) from nums;
 ```
 
 You can verify the offload with "explain".

@@ -40,3 +40,8 @@ TEST_F(MyUdfTest, hivestringstring) {
   const core::QueryConfig config({});
   EXPECT_EQ(TypeKind::VARCHAR, exec::simpleFunctions().resolveFunction(name, {VARCHAR(), VARCHAR()})->type()->kind());
 }
+
+TEST_F(MyUdfTest, myudfincrement) {
+  const std::string name = "myudf_increment";
+  EXPECT_EQ(TypeKind::BIGINT, exec::simpleFunctions().resolveFunction(name, {BIGINT()})->type()->kind());
+}

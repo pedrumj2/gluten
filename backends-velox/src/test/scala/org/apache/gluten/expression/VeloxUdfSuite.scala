@@ -153,6 +153,30 @@ abstract class VeloxUdfSuite extends GlutenQueryTest with SQLHelper {
     }
   }
 
+  test("test native udf callable by its own name") {
+    val tbl = "test_udf_own_name"
+    withTempPath {
+      dir =>
+        try {
+          spark.sql(s"""
+                       |CREATE EXTERNAL TABLE $tbl
+                       |LOCATION 'file://$dir'
+                       |AS select * from values (1L), (2L), (3L)
+                       |""".stripMargin)
+
+          // No CREATE TEMPORARY FUNCTION and no Java class: the name comes from the loaded
+          // library alone.
+          assert(UDFResolver.UDFNames.contains("myudf_increment"))
+
+          val df = spark.sql(s"""SELECT myudf_increment(col1) FROM $tbl""")
+          checkGlutenPlan[ProjectExecTransformer](df)
+          checkAnswer(df, Seq(Row(2L), Row(3L), Row(4L)))
+        } finally {
+          spark.sql(s"DROP TABLE IF EXISTS $tbl")
+        }
+    }
+  }
+
   test("test native hive udaf") {
     val tbl = "test_hive_udaf_replacement"
     val udafClass = "test.org.apache.spark.sql.MyDoubleAvg"
