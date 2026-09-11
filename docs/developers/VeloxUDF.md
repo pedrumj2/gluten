@@ -12,7 +12,7 @@ parent: /developer-overview/
 Velox backend supports User-Defined Functions (UDF) and User-Defined Aggregate Functions (UDAF).
 Users can implement custom functions using the UDF interface provided by Velox and compile them into libraries.
 At runtime, these UDFs are registered alongside their Java implementations via `CREATE TEMPORARY FUNCTION`.
-Once registered, Gluten can parse and offload these UDFs to Velox during execution, 
+Once registered, Gluten can parse and offload these UDFs to Velox during execution,
 meanwhile ensuring proper fallback to Java UDFs when necessary.
 Registered UDAFs can be used both as regular aggregate functions and as aggregate window functions.
 
@@ -42,7 +42,7 @@ The following steps demonstrate how to set up a UDF library project:
       This is where users should register functions by calling `facebook::velox::exec::registerVectorFunction` or other Velox APIs.
 
     - The interface functions are mapped to marcos in [Udf.h](../../cpp/velox/udf/Udf.h).
-  
+
   Assuming there is an existing Hive UDF `org.apache.gluten.sql.hive.MyUDF`, its native UDF can be implemented as follows.
 
   ```
@@ -191,6 +191,18 @@ VeloxColumnarToRow
       +- RowToVeloxColumnar
          +- Scan hive spark_catalog.default.tbl [col1#11], HiveTableRelation [`spark_catalog`.`default`.`tbl`, org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe, Data Cols: [col1#11], Partition Cols: []]
 ```
+
+## Natively Only UDF Registration
+
+This is an alternative to the registration described above, for a UDF that is implemented only in Velox and has no Java counterpart.
+
+A UDF whose registered name contains no dot is added to the session's function registry under that name. It needs no matching Hive UDF class, no jar on the classpath, and no `CREATE TEMPORARY FUNCTION` — register it under a name with no dot, such as `my_udf`, and call it directly:
+
+```
+spark-sql (default)> select my_udf(col1) from tbl;
+```
+
+**There is no fallback with this method.** A name registered this way has no Java implementation behind it, so a query that Gluten cannot offload fails instead of falling back to the JVM. Use the registration described above whenever the fallback path is required.
 
 ## Configurations
 

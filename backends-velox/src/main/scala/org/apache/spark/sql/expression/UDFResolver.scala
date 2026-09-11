@@ -19,13 +19,16 @@ package org.apache.spark.sql.expression
 import org.apache.gluten.backendsapi.velox.VeloxBackendSettings
 import org.apache.gluten.exception.{GlutenException, GlutenNotSupportException}
 import org.apache.gluten.expression._
+import org.apache.gluten.extension.injector.FunctionDescription
 import org.apache.gluten.jni.JniWorkspace
 
 import org.apache.spark.{SparkConf, SparkFiles}
 import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.internal.Logging
+import org.apache.spark.sql.catalyst.FunctionIdentifier
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.{AttributeReference, Cast, Expression, Unevaluable}
+import org.apache.spark.sql.catalyst.analysis.FunctionRegistry
+import org.apache.spark.sql.catalyst.expressions.{AttributeReference, Cast, Expression, ExpressionInfo, Unevaluable}
 import org.apache.spark.sql.catalyst.expressions.aggregate.AggregateFunction
 import org.apache.spark.sql.catalyst.expressions.codegen.{CodegenContext, ExprCode}
 import org.apache.spark.sql.catalyst.types.DataTypeUtils
@@ -336,6 +339,37 @@ object UDFResolver extends Logging {
     SQLConf.get
       .getConfString(VeloxBackendSettings.GLUTEN_VELOX_UDF_ALLOW_TYPE_CONVERSION, "false")
       .toBoolean
+  }
+
+  /**
+   * One Spark function per loaded UDF whose name contains no dot. A dotted name is a Hive UDF class
+   * name, which VeloxHiveUDFTransformer already resolves, so it is skipped here.
+   *
+   * A name colliding with a Spark built-in throws, because the injected names are unqualified and
+   * would redirect that built-in for every query on the session.
+   */
+  def getFunctionDescriptions: Seq[FunctionDescription] = {
+    val (shadowing, injectable) = UDFNames.toSeq
+      .filterNot(_.contains("."))
+      .sorted
+      .partition(name => FunctionRegistry.builtin.functionExists(FunctionIdentifier(name)))
+
+    if (shadowing.nonEmpty) {
+      throw new GlutenException(
+        s"UDF ${shadowing.map(name => s"'$name'").mkString(", ")} loaded from " +
+          s"${VeloxBackendSettings.GLUTEN_VELOX_DRIVER_UDF_LIB_PATHS} or " +
+          s"${VeloxBackendSettings.GLUTEN_VELOX_UDF_LIB_PATHS} " +
+          s"${if (shadowing.size == 1) "shadows a Spark built-in" else "shadow Spark built-ins"} " +
+          s"of the same name. Rename in the UDF library to call by name.")
+    }
+
+    injectable.map {
+      name =>
+        (
+          FunctionIdentifier(name),
+          new ExpressionInfo(classOf[UDFExpression].getName, name),
+          (children: Seq[Expression]) => getUdfExpression(name, name)(children))
+    }
   }
 
   def getUdfExpression(name: String, alias: String)(children: Seq[Expression]): UDFExpression = {

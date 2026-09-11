@@ -34,6 +34,7 @@ import org.apache.gluten.sql.shims.SparkShimLoader
 
 import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.datasources.noop.GlutenNoopWriterRule
+import org.apache.spark.sql.expression.UDFResolver
 
 class VeloxRuleApi extends RuleApi {
   import VeloxRuleApi._
@@ -67,6 +68,11 @@ object VeloxRuleApi {
     if (BackendsApiManager.getSettings.supportAppendDataExec()) {
       injector.injectPlannerStrategy(SparkShimLoader.getSparkShims.getRewriteCreateTableAsSelect(_))
     }
+
+    // Makes a UDF loaded from `udfLibraryPaths` resolvable by its own name. Injected through
+    // SparkInjector so InjectorControl turns a call made while Gluten is disabled into an
+    // analysis-time error rather than a failure at execution.
+    UDFResolver.getFunctionDescriptions.foreach(injector.injectFunction)
   }
 
   /**
