@@ -438,6 +438,75 @@ TEST_F(Substrait2VeloxPlanConversionTest, aggregateMaskMustBeTopLevelField) {
       "Aggregation Operator only supports a top-level field mask.");
 }
 
+TEST_F(Substrait2VeloxPlanConversionTest, sortOverUnionAllKeepsAllSortKeys) {
+  // Two BIGINT columns followed by three VARCHAR columns: if the union named its output columns by
+  // type, the two VARCHAR sort keys would share a name and the sort would drop one of them.
+  const std::vector<std::string> names{"id", "ts", "category", "label", "day"};
+  const auto addRead = [&](::substrait::Rel* rel, const std::vector<std::vector<std::string>>& rows) {
+    auto* read = rel->mutable_read();
+    auto* baseSchema = read->mutable_base_schema();
+    for (size_t col = 0; col < names.size(); ++col) {
+      baseSchema->add_names(names[col]);
+      auto* type = baseSchema->mutable_struct_()->add_types();
+      if (col < 2) {
+        type->mutable_i64()->set_nullability(::substrait::Type_Nullability_NULLABILITY_REQUIRED);
+      } else {
+        type->mutable_string()->set_nullability(::substrait::Type_Nullability_NULLABILITY_REQUIRED);
+      }
+    }
+    auto* values = read->mutable_virtual_table()->add_expressions();
+    for (size_t col = 0; col < names.size(); ++col) {
+      for (const auto& row : rows) {
+        auto* literal = values->add_fields()->mutable_literal();
+        if (col < 2) {
+          literal->set_i64(std::stoll(row[col]));
+        } else {
+          literal->set_string(row[col]);
+        }
+      }
+    }
+  };
+
+  ::substrait::Plan plan;
+  auto* root = plan.add_relations()->mutable_root();
+  for (const auto& name : names) {
+    root->add_names(name);
+  }
+  auto* sort = root->mutable_input()->mutable_sort();
+  auto* set = sort->mutable_input()->mutable_set();
+  set->set_op(::substrait::SetRel_SetOp_SET_OP_UNION_ALL);
+  addRead(set->add_inputs(), {{"1", "10", "a", "y", "2026-01-01"}, {"1", "11", "a", "x", "2026-01-02"}});
+  addRead(set->add_inputs(), {{"1", "12", "a", "y", "2026-01-03"}});
+  for (const auto field : {0, 2, 3}) {
+    auto* sortField = sort->add_sorts();
+    sortField->mutable_expr()->mutable_selection()->mutable_direct_reference()->mutable_struct_field()->set_field(
+        field);
+    sortField->set_direction(::substrait::SortField_SortDirection_SORT_DIRECTION_ASC_NULLS_FIRST);
+  }
+
+  auto converter = std::make_shared<SubstraitToVeloxPlanConverter>(
+      pool(),
+      veloxCfg_.get(),
+      std::vector<std::shared_ptr<ResultIterator>>{},
+      VeloxConnectorIds{.hive = facebook::velox::exec::test::kHiveConnectorId},
+      std::nullopt,
+      std::nullopt,
+      /*validationMode=*/true);
+  auto veloxPlan = converter->toVeloxPlan(plan);
+
+  auto orderBy = std::dynamic_pointer_cast<const core::OrderByNode>(veloxPlan);
+  ASSERT_NE(orderBy, nullptr);
+  ASSERT_EQ(orderBy->sortingKeys().size(), 3);
+
+  auto result = exec::test::AssertQueryBuilder(veloxPlan).serialExecution(true).copyResults(pool());
+  auto expected = makeRowVector({
+      makeFlatVector<int64_t>({1, 1, 1}),
+      makeFlatVector<std::string>({"a", "a", "a"}),
+      makeFlatVector<std::string>({"x", "y", "y"}),
+  });
+  assertEqualVectors(expected, makeRowVector({result->childAt(0), result->childAt(2), result->childAt(3)}));
+}
+
 #ifdef ENABLE_KAFKA
 TEST_F(Substrait2VeloxPlanConversionTest, serializedFileSplit) {
   ::substrait::Plan plan;
