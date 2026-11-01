@@ -69,6 +69,8 @@ class VeloxBackend {
     return globalMemoryManager_.get();
   }
 
+  /// The thread pool that runs Velox drivers when parallel execution is enabled. Returns nullptr
+  /// otherwise, and tasks then run serially on the Spark task thread.
   folly::Executor* executor() const {
     return executor_.get();
   }

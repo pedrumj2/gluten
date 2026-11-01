@@ -66,7 +66,9 @@ T getConfig(
   return defaultValue;
 }
 
-/// We assume in a single Spark task. No thread-safety should be guaranteed.
+/// Used within a single Spark task, whose drivers can change capacity from several threads. Capacity
+/// changes run under the task's memory reservation lock (listener_->runLocked()), which a spill already
+/// holds when it calls back into shrinkCapacity(), so both paths take the locks in the same order.
 class ListenableArbitrator : public velox::memory::MemoryArbitrator {
  public:
   ListenableArbitrator(const Config& config, AllocationListener* listener)
@@ -159,14 +161,24 @@ class ListenableArbitrator : public velox::memory::MemoryArbitrator {
     // Since
     // https://github.com/facebookincubator/velox/pull/9557/files#diff-436e44b7374032f8f5d7eb45869602add6f955162daa2798d01cc82f8725724dL812-L820,
     // We should pass bytes as parameter "reservationBytes" when calling ::grow.
-    auto freeBytes = pool->freeBytes();
-    if (freeBytes > bytes) {
-      if (growPool(pool, 0, bytes)) {
-        return;
-      }
+    //
+    // Use the pool's free capacity without the task lock when it is enough: the locked path can
+    // hold that lock through a spill and block every other allocation of the task meanwhile.
+    if (growPool(pool, 0, bytes)) {
+      return;
+    }
+    listener_->runLocked([&]() { growCapacityLocked(pool, bytes); });
+  }
+
+  void growCapacityLocked(velox::memory::MemoryPool* pool, uint64_t bytes) {
+    // Another thread may have added the capacity while this one waited for the lock.
+    if (growPool(pool, 0, bytes)) {
+      return;
     }
     auto reclaimedFreeBytes = shrinkPool(pool, 0);
-    auto neededBytes = velox::bits::roundUp(bytes - reclaimedFreeBytes, memoryPoolTransferCapacity_);
+    // A concurrent free can leave more free bytes than requested.
+    const auto missingBytes = bytes > reclaimedFreeBytes ? bytes - reclaimedFreeBytes : 0;
+    auto neededBytes = velox::bits::roundUp(missingBytes, memoryPoolTransferCapacity_);
     try {
       listener_->allocationChanged(neededBytes);
     } catch (const std::exception&) {
@@ -176,18 +188,20 @@ class ListenableArbitrator : public velox::memory::MemoryArbitrator {
       listener_->allocationChanged(-reclaimedFreeBytes);
       std::rethrow_exception(std::current_exception());
     }
-    auto ret = growPool(pool, reclaimedFreeBytes + neededBytes, bytes);
-    VELOX_CHECK(
-        ret,
-        "{} failed to grow {} bytes, current state {}",
-        pool->name(),
-        velox::succinctBytes(bytes),
-        pool->toString());
+    if (!growPool(pool, reclaimedFreeBytes + neededBytes, bytes)) {
+      // Give back what Spark just granted, or it stays charged to the task.
+      listener_->allocationChanged(-static_cast<int64_t>(reclaimedFreeBytes + neededBytes));
+      VELOX_FAIL(
+          "{} failed to grow {} bytes, current state {}", pool->name(), velox::succinctBytes(bytes), pool->toString());
+    }
   }
 
   uint64_t shrinkCapacityInternal(velox::memory::MemoryPool* pool, uint64_t bytes) {
-    uint64_t freeBytes = shrinkPool(pool, bytes);
-    listener_->allocationChanged(-freeBytes);
+    uint64_t freeBytes = 0;
+    listener_->runLocked([&]() {
+      freeBytes = shrinkPool(pool, bytes);
+      listener_->allocationChanged(-freeBytes);
+    });
     return freeBytes;
   }
 

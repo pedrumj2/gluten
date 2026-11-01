@@ -594,6 +594,43 @@ object VeloxConfig extends ConfigRegistry {
       .booleanConf
       .createWithDefault(true)
 
+  val PARALLEL_EXECUTION_ENABLED =
+    buildStaticConf("spark.gluten.sql.columnar.backend.velox.parallelExecution.enabled")
+      .doc(
+        "Whether to run the drivers of a Velox task on a shared thread pool, so the task's " +
+          "pipelines run concurrently. When false, each task runs serially on its Spark task " +
+          "thread.")
+      .booleanConf
+      .createWithDefault(false)
+
+  val PARALLEL_EXECUTION_THREAD_POOL_SIZE =
+    buildStaticConf("spark.gluten.sql.columnar.backend.velox.parallelExecution.threadPoolSize")
+      .doc(
+        "Size of the thread pool that runs Velox drivers when parallel execution is enabled. " +
+          "If not set, defaults to 2 * spark.gluten.numTaskSlotsPerExecutor.")
+      .intConf
+      .checkValue(_ > 0, "must be a positive number")
+      .createOptional
+
+  val PARALLEL_EXECUTION_TASK_DRIVERS =
+    buildStaticConf("spark.gluten.sql.columnar.backend.velox.parallelExecution.taskDrivers")
+      .doc(
+        "Number of drivers that read each table scan when parallel execution is enabled. A " +
+          "value above 1 gathers the scan output into one driver for the rest of the plan, so " +
+          "rows from different splits can arrive in a different order, and dynamic filters from " +
+          "a hash join are not pushed into the scan.")
+      .intConf
+      .checkValue(_ > 0, "must be a positive number")
+      .createWithDefault(1)
+
+  val PARALLEL_EXECUTION_BUFFERED_BYTES =
+    buildStaticConf("spark.gluten.sql.columnar.backend.velox.parallelExecution.bufferedBytes")
+      .doc(
+        "Maximum size of the output that Velox drivers buffer for the Spark task thread when " +
+          "parallel execution is enabled. The drivers pause once the buffer is full.")
+      .bytesConf(ByteUnit.BYTE)
+      .createWithDefaultString("512KB")
+
   val VALUE_STREAM_DYNAMIC_FILTER_ENABLED =
     buildConf("spark.gluten.sql.columnar.backend.velox.valueStream.dynamicFilter.enabled")
       .doc(

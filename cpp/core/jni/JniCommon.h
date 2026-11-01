@@ -427,6 +427,7 @@ class SparkAllocationListener final : public gluten::AllocationListener {
     // Resolve JNI symbols on the creator thread to avoid first-touch initialization from IO threads.
     (void)reserveMemoryMethod(env);
     (void)unreserveMemoryMethod(env);
+    jSharedLockGlobalRef_ = newSharedLockGlobalRef(env);
   }
 
   SparkAllocationListener(const SparkAllocationListener&) = delete;
@@ -440,6 +441,9 @@ class SparkAllocationListener final : public gluten::AllocationListener {
       LOG(WARNING) << "SparkAllocationListener#~SparkAllocationListener(): "
                    << "JNIEnv was not attached to current thread";
       return;
+    }
+    if (jSharedLockGlobalRef_ != nullptr) {
+      env->DeleteGlobalRef(jSharedLockGlobalRef_);
     }
     env->DeleteGlobalRef(jListenerGlobalRef_);
   }
@@ -471,6 +475,26 @@ class SparkAllocationListener final : public gluten::AllocationListener {
     }
   }
 
+  void runLocked(const std::function<void()>& fn) override {
+    if (jSharedLockGlobalRef_ == nullptr) {
+      fn();
+      return;
+    }
+    JNIEnv* env;
+    attachCurrentThreadAsDaemonOrThrow(vm_, &env);
+    if (env->MonitorEnter(jSharedLockGlobalRef_) != JNI_OK) {
+      checkException(env);
+      throw gluten::GlutenException("Failed to enter the task memory reservation lock.");
+    }
+    try {
+      fn();
+    } catch (...) {
+      env->MonitorExit(jSharedLockGlobalRef_);
+      throw;
+    }
+    env->MonitorExit(jSharedLockGlobalRef_);
+  }
+
   int64_t currentBytes() override {
     return usedBytes_;
   }
@@ -480,6 +504,19 @@ class SparkAllocationListener final : public gluten::AllocationListener {
   }
 
  private:
+  // Returns a global reference to the lock ReservationListener.sharedLock() returns, or null when
+  // the listener has none.
+  jobject newSharedLockGlobalRef(JNIEnv* env) {
+    jobject lock = env->CallObjectMethod(jListenerGlobalRef_, sharedLockMethod(env));
+    checkException(env);
+    if (lock == nullptr) {
+      return nullptr;
+    }
+    jobject globalRef = env->NewGlobalRef(lock);
+    env->DeleteLocalRef(lock);
+    return globalRef;
+  }
+
   jclass javaReservationListenerClass(JNIEnv* env) {
     static jclass javaReservationListenerClass = createGlobalClassReference(
         env,
@@ -500,8 +537,15 @@ class SparkAllocationListener final : public gluten::AllocationListener {
     return unreserveMemoryMethod;
   }
 
+  jmethodID sharedLockMethod(JNIEnv* env) {
+    static jmethodID sharedLockMethod =
+        getMethodIdOrError(env, javaReservationListenerClass(env), "sharedLock", "()Ljava/lang/Object;");
+    return sharedLockMethod;
+  }
+
   JavaVM* vm_;
   jobject jListenerGlobalRef_;
+  jobject jSharedLockGlobalRef_{nullptr};
   std::atomic_int64_t usedBytes_{0L};
   std::atomic_int64_t peakBytes_{0L};
 };
@@ -514,6 +558,10 @@ class BacktraceAllocationListener final : public gluten::AllocationListener {
   void allocationChanged(int64_t bytes) override {
     allocationBacktrace(bytes);
     delegator_->allocationChanged(bytes);
+  }
+
+  void runLocked(const std::function<void()>& fn) override {
+    delegator_->runLocked(fn);
   }
 
  private:

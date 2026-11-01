@@ -271,6 +271,11 @@ class SubstraitToVeloxPlanConverter {
   /// starting from zero.
   std::string nextPlanNodeId();
 
+  /// Puts a gather exchange above the scan when the task reads each scan with several drivers.
+  /// The rest of the plan then runs on one driver, as Gluten plans have no local repartitioning
+  /// for operators such as a final aggregation that need all of the task's rows in one place.
+  core::PlanNodePtr maybeWrapWithGather(core::PlanNodePtr tableScanNode);
+
   /// Used to convert AggregateRel into Velox plan node.
   /// The output of child node will be used as the input of Aggregation.
   std::shared_ptr<const core::PlanNode> toVeloxAgg(

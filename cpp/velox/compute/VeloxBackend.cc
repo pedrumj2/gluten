@@ -21,6 +21,7 @@
 
 #include <folly/executors/CPUThreadPoolExecutor.h>
 #include <folly/executors/task_queue/UnboundedBlockingQueue.h>
+#include <folly/executors/thread_factory/NamedThreadFactory.h>
 
 #include "compute/delta/DeltaConnector.h"
 #include "operators/functions/RegistrationAllFunctions.h"
@@ -246,6 +247,16 @@ void VeloxBackend::init(
       numTaskSlotsPerExecutor >= 0,
       kNumTaskSlotsPerExecutor + " was set to negative number " + std::to_string(numTaskSlotsPerExecutor) +
           ", this should not happen.");
+
+  if (backendConf_->get<bool>(kParallelExecutionEnabled, kParallelExecutionEnabledDefault)) {
+    const auto threadPoolSize =
+        backendConf_->get<int32_t>(kParallelExecutionThreadPoolSize, 2 * numTaskSlotsPerExecutor);
+    if (threadPoolSize > 0) {
+      executor_ = std::make_unique<folly::CPUThreadPoolExecutor>(
+          threadPoolSize, std::make_shared<folly::NamedThreadFactory>("GlutenDriver"));
+      LOG(INFO) << "Created a thread pool of " << threadPoolSize << " threads for parallel execution.";
+    }
+  }
 
   const auto spillThreadNum = backendConf_->get<uint32_t>(kSpillThreadNum, kSpillThreadNumDefaultValue);
   if (spillThreadNum > 0) {

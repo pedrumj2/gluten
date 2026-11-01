@@ -104,6 +104,20 @@ const std::string kHashProbeBloomFilterBypassMinPct =
     "spark.gluten.sql.columnar.backend.velox.hashProbe.bloomFilter.bypassMinPct";
 const int32_t kHashProbeBloomFilterBypassMinPctDefault = 85;
 
+const std::string kParallelExecutionEnabled = "spark.gluten.sql.columnar.backend.velox.parallelExecution.enabled";
+const bool kParallelExecutionEnabledDefault = false;
+
+const std::string kParallelExecutionThreadPoolSize =
+    "spark.gluten.sql.columnar.backend.velox.parallelExecution.threadPoolSize";
+
+const std::string kParallelExecutionTaskDrivers =
+    "spark.gluten.sql.columnar.backend.velox.parallelExecution.taskDrivers";
+const int32_t kParallelExecutionTaskDriversDefault = 1;
+
+const std::string kParallelExecutionBufferedBytes =
+    "spark.gluten.sql.columnar.backend.velox.parallelExecution.bufferedBytes";
+const uint64_t kParallelExecutionBufferedBytesDefault = 512 << 10;
+
 const std::string kValueStreamDynamicFilterEnabled =
     "spark.gluten.sql.columnar.backend.velox.valueStream.dynamicFilter.enabled";
 const bool kValueStreamDynamicFilterEnabledDefault = false;

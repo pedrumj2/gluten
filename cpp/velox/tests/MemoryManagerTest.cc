@@ -147,6 +147,9 @@ class AllocationListenerWrapper : public AllocationListener {
   void allocationChanged(int64_t diff) override {
     delegate_->allocationChanged(diff);
   }
+  void runLocked(const std::function<void()>& fn) override {
+    delegate_->runLocked(fn);
+  }
   int64_t currentBytes() override {
     return delegate_->currentBytes();
   }
@@ -174,6 +177,12 @@ class MockSparkTaskMemoryManager {
   void release(uint64_t bytes);
   uint64_t currentBytes() {
     return currentBytes_;
+  }
+
+  // mutex_ stands in for the task memory reservation lock that acquire() and release() take.
+  void runLocked(const std::function<void()>& fn) {
+    std::unique_lock l(mutex_);
+    fn();
   }
 
  private:
@@ -206,6 +215,10 @@ class MockSparkAllocationListener : public SpillableAllocationListener {
     }
     manager_->release(-diff);
     currentBytes_ -= (-diff);
+  }
+
+  void runLocked(const std::function<void()>& fn) override {
+    manager_->runLocked(fn);
   }
 
   uint64_t shrink(uint64_t bytes) override {
@@ -316,6 +329,48 @@ class MockMemoryReclaimer : public facebook::velox::memory::MemoryReclaimer {
   int32_t size_;
 };
 
+// Counts the allocationChanged() calls that arrive without the delegate's task reservation lock.
+class LockTrackingAllocationListener : public AllocationListener {
+ public:
+  explicit LockTrackingAllocationListener(AllocationListener* delegate) : delegate_(delegate) {}
+
+  void runLocked(const std::function<void()>& fn) override {
+    delegate_->runLocked([&]() {
+      ++lockDepth_;
+      fn();
+      --lockDepth_;
+    });
+  }
+
+  void allocationChanged(int64_t diff) override {
+    if (lockDepth_ == 0) {
+      ++unlockedCalls_;
+    } else {
+      ++lockedCalls_;
+    }
+    delegate_->allocationChanged(diff);
+  }
+
+  int64_t currentBytes() override {
+    return delegate_->currentBytes();
+  }
+
+  int32_t lockedCalls() const {
+    return lockedCalls_;
+  }
+
+  int32_t unlockedCalls() const {
+    return unlockedCalls_;
+  }
+
+ private:
+  // Per thread, because each thread holds the lock on its own.
+  inline static thread_local int32_t lockDepth_{0};
+  AllocationListener* const delegate_;
+  std::atomic_int32_t lockedCalls_{0};
+  std::atomic_int32_t unlockedCalls_{0};
+};
+
 void assertCapacitiesMatch(MockSparkTaskMemoryManager& tmm, std::vector<std::unique_ptr<VeloxMemoryManager>>& vmms) {
   uint64_t sum = 0;
   for (const auto& vmm : vmms) {
@@ -404,6 +459,66 @@ TEST_F(MultiMemoryManagerTest, spill) {
   }
 
   ASSERT_EQ(tmm.currentBytes(), 0);
+}
+
+TEST_F(MultiMemoryManagerTest, capacityChangesRunUnderTheTaskReservationLock) {
+  const uint64_t maxBytes = 256 << 20;
+  const int32_t allocateSize = 8 << 20;
+
+  MockSparkTaskMemoryManager tmm{maxBytes};
+  auto* sparkListener = tmm.newListener([](uint64_t) -> uint64_t { return 0; }, [](uint64_t) -> uint64_t { return 0; });
+  auto tracking = std::make_unique<LockTrackingAllocationListener>(sparkListener);
+  auto* trackingRaw = tracking.get();
+  auto vmm = newVeloxMemoryManager(std::move(tracking));
+  auto pool = vmm->getLeafMemoryPool();
+
+  std::vector<void*> buffs;
+  for (int i = 0; i < 8; ++i) {
+    buffs.push_back(pool->allocate(allocateSize));
+  }
+  for (auto* buff : buffs) {
+    pool->free(buff, allocateSize);
+  }
+  vmm->getMemoryManager()->arbitrator()->shrinkCapacity(allocateSize * buffs.size());
+
+  EXPECT_GT(trackingRaw->lockedCalls(), 0);
+  EXPECT_EQ(trackingRaw->unlockedCalls(), 0) << "The arbitrator changed capacity without the task reservation lock";
+  EXPECT_EQ(tmm.currentBytes(), 0);
+}
+
+TEST_F(MultiMemoryManagerTest, concurrentAllocationsOnOneManager) {
+  const uint64_t maxBytes = 1L << 30;
+  const int32_t numThreads = 8;
+  const int32_t numAllocations = 32;
+  const int32_t allocateSize = 1 << 20;
+
+  MockSparkTaskMemoryManager tmm{maxBytes};
+  auto* sparkListener = tmm.newListener([](uint64_t) -> uint64_t { return 0; }, [](uint64_t) -> uint64_t { return 0; });
+  auto tracking = std::make_unique<LockTrackingAllocationListener>(sparkListener);
+  auto* trackingRaw = tracking.get();
+  auto vmm = newVeloxMemoryManager(std::move(tracking));
+  auto pool = vmm->getLeafMemoryPool();
+
+  std::vector<std::thread> threads;
+  for (int32_t i = 0; i < numThreads; ++i) {
+    threads.emplace_back([&]() {
+      std::vector<void*> buffs;
+      for (int32_t j = 0; j < numAllocations; ++j) {
+        buffs.push_back(pool->allocate(allocateSize));
+      }
+      for (auto* buff : buffs) {
+        pool->free(buff, allocateSize);
+      }
+    });
+  }
+  for (auto& thread : threads) {
+    thread.join();
+  }
+  vmm->getMemoryManager()->arbitrator()->shrinkCapacity(maxBytes);
+
+  EXPECT_GT(trackingRaw->lockedCalls(), 0);
+  EXPECT_EQ(trackingRaw->unlockedCalls(), 0) << "The arbitrator changed capacity without the task reservation lock";
+  EXPECT_EQ(tmm.currentBytes(), 0);
 }
 
 } // namespace gluten

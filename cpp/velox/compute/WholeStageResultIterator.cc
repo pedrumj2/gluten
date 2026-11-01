@@ -119,23 +119,28 @@ WholeStageResultIterator::WholeStageResultIterator(
   fileSystem->mkdir(spillDir);
 
   std::unordered_set<velox::core::PlanNodeId> emptySet;
-  const bool serialExecution = true;
+  parallelExecution_ =
+      executor_ != nullptr && veloxCfg_->get<bool>(kParallelExecutionEnabled, kParallelExecutionEnabledDefault);
 
   facebook::velox::exec::CursorParameters params;
   params.planNode = planNode;
   params.destination = 0;
-  params.maxDrivers = 1;
+  params.maxDrivers = parallelExecution_
+      ? veloxCfg_->get<int32_t>(kParallelExecutionTaskDrivers, kParallelExecutionTaskDriversDefault)
+      : 1;
   params.queryCtx = createNewVeloxQueryCtx();
   params.executionStrategy = velox::core::ExecutionStrategy::kUngrouped;
   params.groupedExecutionLeafNodeIds = std::move(emptySet);
   params.numSplitGroups = 1;
   params.spillDirectory = spillDir;
-  params.serialExecution = serialExecution;
+  params.serialExecution = !parallelExecution_;
+  params.bufferedBytes =
+      veloxCfg_->get<uint64_t>(kParallelExecutionBufferedBytes, kParallelExecutionBufferedBytesDefault);
   params.copyResult = false;
   params.outputPool = memoryManager_->getLeafMemoryPool();
   cursor_ = velox::exec::TaskCursor::create(params);
   task_ = cursor_->task().get();
-  if (!task_->supportSerialExecutionMode()) {
+  if (!parallelExecution_ && !task_->supportSerialExecutionMode()) {
     throw std::runtime_error("Task doesn't support single threaded execution: " + planNode->toString());
   }
 
@@ -305,6 +310,7 @@ std::shared_ptr<velox::core::QueryCtx> WholeStageResultIterator::createNewVeloxQ
 std::shared_ptr<ColumnarBatch> WholeStageResultIterator::next() {
   while (true) {
     if (!cursor_->moveNext()) {
+      waitForDriversToClose();
       return nullptr;
     }
     RowVectorPtr vector = cursor_->current();
@@ -320,6 +326,20 @@ std::shared_ptr<ColumnarBatch> WholeStageResultIterator::next() {
       }
     }
     return std::make_shared<VeloxColumnarBatch>(vector);
+  }
+}
+
+void WholeStageResultIterator::waitForDriversToClose() {
+  // In parallel mode the last batch can arrive while drivers are still closing their operators, and
+  // collectMetrics() needs their stats. No barrier can follow noMoreSplits(), so the task is finishing.
+  if (!parallelExecution_ || !allSplitsAdded_) {
+    return;
+  }
+  const std::chrono::milliseconds timeout{
+      veloxCfg_->get<int32_t>(kVeloxAsyncTimeoutOnTaskStopping, kVeloxAsyncTimeoutOnTaskStoppingDefault)};
+  if (!task_->allDriversClosedFuture().wait(timeout)) {
+    LOG(WARNING) << "Timed out after " << timeout.count() << " ms waiting for the drivers of " << taskInfo_
+                 << " to close. Its metrics can be incomplete.";
   }
 }
 

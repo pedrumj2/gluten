@@ -74,4 +74,47 @@ INSTANTIATE_TEST_SUITE_P(
         BroadcastBuildThreadsTestParam{0, 4, 4},
         BroadcastBuildThreadsTestParam{8, 4, 4}));
 
+struct ParallelExecutionThreadsTestParam {
+  bool enabled;
+  int taskSlots;
+  std::optional<int> threadPoolSize;
+  std::optional<int> expectedThreads;
+};
+
+class VeloxBackendParallelExecutionTest : public ::testing::TestWithParam<ParallelExecutionThreadsTestParam> {
+ protected:
+  void SetUp() override {
+    const auto& param = GetParam();
+    std::unordered_map<std::string, std::string> conf{
+        {kNumTaskSlotsPerExecutor, std::to_string(param.taskSlots)},
+        {kParallelExecutionEnabled, param.enabled ? "true" : "false"}};
+    if (param.threadPoolSize.has_value()) {
+      conf.emplace(kParallelExecutionThreadPoolSize, std::to_string(param.threadPoolSize.value()));
+    }
+    VeloxBackend::create(AllocationListener::noop(), conf);
+  }
+
+  void TearDown() override {
+    VeloxBackend::get()->tearDown();
+  }
+};
+
+TEST_P(VeloxBackendParallelExecutionTest, executorThreadCount) {
+  auto* executor = dynamic_cast<folly::CPUThreadPoolExecutor*>(VeloxBackend::get()->executor());
+  if (!GetParam().expectedThreads.has_value()) {
+    EXPECT_EQ(executor, nullptr);
+    return;
+  }
+  ASSERT_NE(executor, nullptr);
+  ASSERT_EQ(executor->numThreads(), GetParam().expectedThreads.value());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ParallelExecutionThreads,
+    VeloxBackendParallelExecutionTest,
+    ::testing::Values(
+        ParallelExecutionThreadsTestParam{false, 8, std::nullopt, std::nullopt},
+        ParallelExecutionThreadsTestParam{true, 8, std::nullopt, 16},
+        ParallelExecutionThreadsTestParam{true, 8, 3, 3}));
+
 } // namespace gluten

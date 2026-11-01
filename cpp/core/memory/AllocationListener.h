@@ -18,6 +18,7 @@
 #pragma once
 
 #include <algorithm>
+#include <functional>
 #include <memory>
 #include <mutex>
 
@@ -31,6 +32,13 @@ class AllocationListener {
 
   // Value of diff can be either positive or negative
   virtual void allocationChanged(int64_t diff) = 0;
+
+  /// Runs `fn` while holding the task-wide lock that allocationChanged() takes on its own. A
+  /// spill already holds that lock when it calls back into native code, so taking it here keeps
+  /// both paths in one lock order. The lock is reentrant. Listeners without such a lock just run `fn`.
+  virtual void runLocked(const std::function<void()>& fn) {
+    fn();
+  }
 
   virtual int64_t currentBytes() {
     return 0;
@@ -65,6 +73,10 @@ class BlockAllocationListener final : public AllocationListener {
       reserve(-diff);
       throw;
     }
+  }
+
+  void runLocked(const std::function<void()>& fn) override {
+    delegated_->runLocked(fn);
   }
 
   int64_t currentBytes() override {

@@ -43,6 +43,11 @@ public class ManagedReservationListener implements ReservationListener {
   }
 
   @Override
+  public Object sharedLock() {
+    return sharedLock;
+  }
+
+  @Override
   public long reserve(long size) {
     synchronized (sharedLock) {
       try {

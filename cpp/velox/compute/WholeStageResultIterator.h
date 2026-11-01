@@ -120,6 +120,9 @@ class WholeStageResultIterator : public SplitAwareColumnarBatchIterator {
   /// Collect Velox metrics.
   void collectMetrics();
 
+  /// Waits for the drivers to close once the last batch has been returned in parallel mode.
+  void waitForDriversToClose();
+
   /// Memory.
   VeloxMemoryManager* memoryManager_;
 
@@ -130,6 +133,7 @@ class WholeStageResultIterator : public SplitAwareColumnarBatchIterator {
 #endif
   const SparkTaskInfo taskInfo_;
   folly::Executor* executor_;
+  bool parallelExecution_{false};
   std::unique_ptr<facebook::velox::exec::TaskCursor> cursor_;
   facebook::velox::exec::Task* task_ = nullptr;
   std::shared_ptr<const facebook::velox::core::PlanNode> veloxPlan_;

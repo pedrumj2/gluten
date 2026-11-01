@@ -23,4 +23,13 @@ public interface ReservationListener {
   long unreserve(long size);
 
   long getUsedBytes();
+
+  /**
+   * The task-wide lock that {@link #reserve} and {@link #unreserve} synchronize on, or null when
+   * the listener has none. Native code holds it around a reserve so the reserve stays in the same
+   * lock order as a spill, which already holds it when it calls back into native code.
+   */
+  default Object sharedLock() {
+    return null;
+  }
 }
