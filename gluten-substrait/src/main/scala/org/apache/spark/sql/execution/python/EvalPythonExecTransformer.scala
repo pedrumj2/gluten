@@ -21,10 +21,8 @@ import org.apache.gluten.execution.{TransformContext, TransformSupport, UnaryTra
 import org.apache.gluten.execution.ValidationResult
 import org.apache.gluten.expression._
 import org.apache.gluten.metrics.MetricsUpdater
-import org.apache.gluten.substrait.`type`._
 import org.apache.gluten.substrait.SubstraitContext
 import org.apache.gluten.substrait.expression._
-import org.apache.gluten.substrait.extensions.ExtensionBuilder
 import org.apache.gluten.substrait.rel._
 
 import org.apache.spark.sql.catalyst.expressions._
@@ -32,12 +30,18 @@ import org.apache.spark.sql.execution.SparkPlan
 
 import java.util.{ArrayList => JArrayList, List => JList}
 
+import scala.collection.JavaConverters._
+
 case class EvalPythonExecTransformer(
     udfs: Seq[PythonUDF],
     resultAttrs: Seq[Attribute],
     child: SparkPlan)
   extends EvalPythonExecBase
   with UnaryTransformSupport {
+
+  // Note: "metrics" is made transient to avoid sending driver-side metrics to tasks.
+  @transient override lazy val metrics =
+    BackendsApiManager.getMetricsApiInstance.genFilterTransformerMetrics(sparkContext)
 
   override def metricsUpdater(): MetricsUpdater =
     BackendsApiManager.getMetricsApiInstance.genFilterTransformerMetricsUpdater(metrics)
@@ -67,7 +71,7 @@ case class EvalPythonExecTransformer(
             .doTransform(context))
       })
 
-    val relNode = RelBuilder.makeProjectRel(null, expressionNodes, context, operatorId)
+    val relNode = getRelNode(null, expressionNodes, context, operatorId, child.output, true)
 
     doNativeValidation(context, relNode)
   }
@@ -98,18 +102,12 @@ case class EvalPythonExecTransformer(
       operatorId: Long,
       inputAttributes: Seq[Attribute],
       validation: Boolean): RelNode = {
-    if (!validation) {
-      RelBuilder.makeProjectRel(input, expressionNodes, context, operatorId)
-    } else {
-      // Use a extension node to send the input types through Substrait plan for validation.
-      val inputTypeNodeList = new JArrayList[TypeNode]()
-      for (attr <- inputAttributes) {
-        inputTypeNodeList.add(ConverterUtils.getTypeNode(attr.dataType, attr.nullable))
-      }
-      val extensionNode = ExtensionBuilder.makeAdvancedExtension(
-        BackendsApiManager.getTransformerApiInstance.packPBMessage(
-          TypeBuilder.makeStruct(false, inputTypeNodeList).toProtobuf))
-      RelBuilder.makeProjectRel(input, expressionNodes, extensionNode, context, operatorId, -1)
-    }
+    RelBuilder.makeProjectRel(
+      inputAttributes.asJava,
+      input,
+      expressionNodes,
+      context,
+      operatorId,
+      validation)
   }
 }
