@@ -163,7 +163,7 @@ std::vector<char> VeloxColumnarBatch::toUnsafeRow(int32_t rowId) const {
   auto size = fast->rowSize(rowId);
   std::vector<char> bytes(size);
   std::memset(bytes.data(), 0, bytes.size());
-  fast->serialize(0, bytes.data());
+  fast->serialize(rowId, bytes.data());
   return bytes;
 }
 
