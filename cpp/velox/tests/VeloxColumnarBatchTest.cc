@@ -16,6 +16,7 @@
  */
 
 #include "memory/VeloxColumnarBatch.h"
+#include "velox/row/UnsafeRowFast.h"
 #include "velox/vector/arrow/Bridge.h"
 #include "velox/vector/tests/utils/VectorTestBase.h"
 
@@ -60,6 +61,23 @@ TEST_F(VeloxColumnarBatchTest, flattenTruncatedVector) {
   auto inputOfMap = makeRowVector({encodedMapVector});
   auto batchOfMap = std::make_shared<VeloxColumnarBatch>(inputOfMap);
   ASSERT_NO_THROW(batchOfMap->getFlattenedRowVector());
+}
+
+TEST_F(VeloxColumnarBatchTest, toUnsafeRow) {
+  auto input = makeRowVector(
+      {makeFlatVector<int32_t>({1, 2, 3}),
+       makeFlatVector<std::string>({"a", std::string(20, 'b'), std::string(40, 'c')})});
+  auto batch = std::make_shared<VeloxColumnarBatch>(input);
+
+  std::vector<std::vector<char>> unsafeRows(input->size());
+  std::vector<char*> unsafeRowAddresses(input->size());
+  for (vector_size_t i = 0; i < input->size(); ++i) {
+    unsafeRows[i] = batch->toUnsafeRow(i);
+    unsafeRowAddresses[i] = unsafeRows[i].data();
+  }
+
+  auto output = row::UnsafeRowFast::deserialize(unsafeRowAddresses, asRowType(input->type()), pool());
+  test::assertEqualVectors(input, output);
 }
 
 } // namespace gluten
