@@ -19,12 +19,16 @@ package org.apache.spark.sql
 import org.apache.spark.SparkConf
 
 import java.net.JarURLConnection
-import java.nio.file.{Files, Paths, StandardCopyOption}
-import java.util.jar.JarFile
+import java.nio.channels.FileChannel
+import java.nio.file.{Files, Path, Paths, StandardCopyOption, StandardOpenOption}
+import java.util.jar.{JarEntry, JarFile}
+
+import scala.jdk.CollectionConverters._
 
 private[sql] object GlutenStructuredStreamingResourceBootstrap {
   private val StructuredStreamingRoot = "structured-streaming/"
   private val ResourceProbe = s"${StructuredStreamingRoot}partition-tests/randomSchemas"
+  private val CopyLockFile = "structured-streaming.lock"
 
   @volatile private var initialized = false
 
@@ -53,31 +57,46 @@ private[sql] object GlutenStructuredStreamingResourceBootstrap {
     }
 
     val testClassesRoot = maybeTestClassesRoot.get
-    if (Files.exists(testClassesRoot.resolve(ResourceProbe))) {
-      return
+    // Test JVMs that run in parallel share this directory, so they copy into it one at a time.
+    val lockChannel = FileChannel.open(
+      testClassesRoot.resolve(CopyLockFile),
+      StandardOpenOption.CREATE,
+      StandardOpenOption.WRITE)
+    try {
+      lockChannel.lock()
+      if (!Files.exists(testClassesRoot.resolve(ResourceProbe))) {
+        copyEntries(resourceUrl, testClassesRoot)
+      }
+    } finally {
+      lockChannel.close()
     }
+  }
 
+  private def copyEntries(resourceUrl: java.net.URL, testClassesRoot: Path): Unit = {
     val connection = resourceUrl.openConnection().asInstanceOf[JarURLConnection]
     val jarPath = Paths.get(connection.getJarFileURL.toURI)
     val jarFile = new JarFile(jarPath.toFile)
     try {
-      val entries = jarFile.entries()
-      while (entries.hasMoreElements) {
-        val entry = entries.nextElement()
-        val entryName = entry.getName
-        if (!entry.isDirectory && entryName.startsWith(StructuredStreamingRoot)) {
-          val targetPath = testClassesRoot.resolve(entryName)
-          Option(targetPath.getParent).foreach(Files.createDirectories(_))
-          val in = jarFile.getInputStream(entry)
-          try {
-            Files.copy(in, targetPath, StandardCopyOption.REPLACE_EXISTING)
-          } finally {
-            in.close()
-          }
-        }
+      val entries = jarFile.entries().asScala.toSeq.filter {
+        entry => !entry.isDirectory && entry.getName.startsWith(StructuredStreamingRoot)
       }
+      // Copy ResourceProbe last. Another JVM skips copying once it finds that file,
+      // so every other file has to be in place by then.
+      val (probe, others) = entries.partition(_.getName == ResourceProbe)
+      (others ++ probe).foreach(copyEntry(jarFile, _, testClassesRoot))
     } finally {
       jarFile.close()
+    }
+  }
+
+  private def copyEntry(jarFile: JarFile, entry: JarEntry, testClassesRoot: Path): Unit = {
+    val targetPath = testClassesRoot.resolve(entry.getName)
+    Option(targetPath.getParent).foreach(Files.createDirectories(_))
+    val in = jarFile.getInputStream(entry)
+    try {
+      Files.copy(in, targetPath, StandardCopyOption.REPLACE_EXISTING)
+    } finally {
+      in.close()
     }
   }
 }
