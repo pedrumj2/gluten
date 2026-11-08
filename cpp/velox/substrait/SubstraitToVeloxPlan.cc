@@ -17,6 +17,8 @@
 
 #include "SubstraitToVeloxPlan.h"
 
+#include <stack>
+
 #include "TypeUtils.h"
 #include "VariantToVectorConverter.h"
 #include "compute/delta/DeltaConnector.h"
