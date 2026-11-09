@@ -20,6 +20,7 @@ import org.apache.gluten.backendsapi.velox.VeloxBackendSettings
 import org.apache.gluten.config.VeloxConfig
 import org.apache.gluten.execution.ProjectExecTransformer
 import org.apache.gluten.execution.WindowExecTransformer
+import org.apache.gluten.jni.JniWorkspace
 import org.apache.gluten.tags.{SkipTest, UDFTest}
 
 import org.apache.spark.SparkConf
@@ -30,6 +31,7 @@ import org.apache.spark.sql.execution.ProjectExec
 import org.apache.spark.sql.execution.window.WindowExec
 import org.apache.spark.sql.expression.UDFResolver
 
+import java.io.File
 import java.nio.file.Paths
 
 abstract class VeloxUdfSuite extends GlutenQueryTest with SQLHelper {
@@ -346,6 +348,21 @@ abstract class VeloxUdfSuite extends GlutenQueryTest with SQLHelper {
     // then
     checkGlutenPlan[ProjectExecTransformer](df)
     checkAnswer(df, expected)
+  }
+
+  test("a udf library that cannot be fetched is skipped") {
+    // given
+    val library = new File(udfLibPath.split(",").head).getCanonicalFile
+    val conf = new SparkConf().set(
+      VeloxBackendSettings.GLUTEN_VELOX_UDF_LIB_PATHS,
+      s"file:///nonexistent/libmissing.so,${library.toURI}")
+    val expected = new File(JniWorkspace.getDefault.getWorkDir, library.getName).getPath
+
+    // when
+    UDFResolver.resolveUdfConf(conf, isDriver = false)
+
+    // then
+    assert(conf.get(VeloxBackendSettings.GLUTEN_VELOX_INTERNAL_UDF_LIB_PATHS) == expected)
   }
 }
 

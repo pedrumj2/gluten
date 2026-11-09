@@ -44,6 +44,7 @@ import java.util.Locale
 
 import scala.collection.JavaConverters.asScalaIteratorConverter
 import scala.collection.mutable
+import scala.util.control.NonFatal
 
 case class UserDefinedAggregateFunction(
     name: String,
@@ -251,8 +252,21 @@ object UDFResolver extends Logging {
         // Set resolved paths to the internal config to parse on native side.
         sparkConf.set(
           VeloxBackendSettings.GLUTEN_VELOX_INTERNAL_UDF_LIB_PATHS,
-          getAllLibraries(sparkConf, isDriver, paths))
+          paths.split(",").flatMap(getLibrariesOrSkip(sparkConf, isDriver, _)).mkString(","))
       case None =>
+    }
+  }
+
+  private def getLibrariesOrSkip(
+      sparkConf: SparkConf,
+      isDriver: Boolean,
+      path: String): Seq[String] = {
+    try {
+      getAllLibraries(sparkConf, isDriver, path)
+    } catch {
+      case NonFatal(e) =>
+        logWarning(s"Failed to resolve udf library $path, skipping it: $e")
+        Seq.empty
     }
   }
 
@@ -333,7 +347,7 @@ object UDFResolver extends Logging {
             Seq(f.toString)
           }
       }
-      .mkString(",")
+      .toSeq
   }
 
   private def checkAllowTypeConversion: Boolean = {

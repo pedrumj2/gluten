@@ -52,7 +52,8 @@ void* loadSymFromLibrary(
 namespace gluten {
 
 void UdfLoader::loadUdfLibraries(const std::string& libPaths) {
-  const auto& paths = splitPaths(libPaths, /*checkExists=*/true);
+  // A missing file fails dlopen, so loadUdfLibrariesInternal skips it like any other library that cannot load.
+  const auto& paths = splitPaths(libPaths, /*checkExists=*/false);
   loadUdfLibrariesInternal(paths);
 }
 
@@ -62,8 +63,9 @@ void UdfLoader::loadUdfLibrariesInternal(const std::vector<std::string>& libPath
       void* handle = dlopen(libPath.c_str(), RTLD_LAZY);
       if (handle == nullptr) {
         const char* error = dlerror();
-        throw gluten::GlutenException(
-            fmt::format("Failed to load udf library {}: {}", libPath, error != nullptr ? error : "unknown error"));
+        LOG(WARNING) << "Failed to load udf library " << libPath
+                     << ", skipping it: " << (error != nullptr ? error : "unknown error");
+        continue;
       }
       handles_[libPath] = handle;
     }
@@ -156,10 +158,18 @@ std::unordered_set<std::string> UdfLoader::getRegisteredUdafNames() {
 }
 
 void UdfLoader::registerUdf() {
-  for (const auto& item : handles_) {
-    void* sym = loadSymFromLibrary(item.second, item.first, GLUTEN_TOSTRING(GLUTEN_REGISTER_UDF));
-    auto registerUdf = reinterpret_cast<void (*)()>(sym);
-    registerUdf();
+  for (auto it = handles_.begin(); it != handles_.end();) {
+    try {
+      void* sym = loadSymFromLibrary(it->second, it->first, GLUTEN_TOSTRING(GLUTEN_REGISTER_UDF));
+      auto registerUdf = reinterpret_cast<void (*)()>(sym);
+      registerUdf();
+      ++it;
+    } catch (const std::exception& e) {
+      // Dropping the handle keeps the library's signatures from being reported to Spark. The library stays
+      // loaded, since it may have registered some functions before it failed.
+      LOG(WARNING) << "Failed to register udf library " << it->first << ", skipping it: " << e.what();
+      it = handles_.erase(it);
+    }
   }
 }
 

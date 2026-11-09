@@ -115,6 +115,8 @@ For detailed implementation, you can refer to the example code in [MyUDAF.cc](..
 
 Gluten loads the UDF libraries at runtime. You can upload UDF libraries via `--files` or `--archives`, and configure the library paths using the provided Spark configuration, which accepts comma separated list of library paths.
 
+A library that is missing, or that fails to load or register its functions, is skipped with a warning in the driver or executor log, and Gluten starts without it.
+
 Note if running on Yarn client mode, the uploaded files are not reachable on driver side. Users should copy those files to somewhere reachable for driver and set `spark.gluten.sql.columnar.backend.velox.driver.udfLibraryPaths`.
 This configuration is also useful when the `udfLibraryPaths` is different between driver side and executor side.
 

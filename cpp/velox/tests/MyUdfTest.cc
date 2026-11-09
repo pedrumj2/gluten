@@ -19,7 +19,7 @@
 #include <fstream>
 #include <vector>
 #include "udf/UdfLoader.h"
-#include "utils/Exception.h"
+#include "velox/exec/Aggregate.h"
 #include "velox/expression/SimpleFunctionRegistry.h"
 #include "velox/functions/prestosql/tests/utils/FunctionBaseTest.h"
 #include "velox/parse/TypeResolver.h"
@@ -44,15 +44,20 @@ TEST_F(MyUdfTest, hivestringstring) {
   EXPECT_EQ(TypeKind::VARCHAR, exec::simpleFunctions().resolveFunction(name, {VARCHAR(), VARCHAR()})->type()->kind());
 }
 
-TEST_F(MyUdfTest, invalidLibraryFailsToLoad) {
-  const auto path = std::filesystem::temp_directory_path() / "gluten_my_udf_test_invalid.so";
-  std::ofstream(path) << "not a shared library";
-  std::string error;
-  try {
-    gluten::UdfLoader::getInstance()->loadUdfLibraries(path.string());
-  } catch (const gluten::GlutenException& e) {
-    error = e.what();
-  }
-  std::filesystem::remove(path);
-  EXPECT_NE(error.find("Failed to load udf library " + path.string()), std::string::npos) << error;
+TEST_F(MyUdfTest, unloadableLibrariesAreSkipped) {
+  const auto invalid = std::filesystem::temp_directory_path() / "gluten_my_udf_test_invalid.so";
+  const auto missing = std::filesystem::temp_directory_path() / "gluten_my_udf_test_missing.so";
+  std::ofstream(invalid) << "not a shared library";
+  auto udfLoader = gluten::UdfLoader::getInstance();
+  EXPECT_NO_THROW(
+      udfLoader->loadUdfLibraries(invalid.string() + "," + missing.string() + ",../udf/examples/libmyudaf.so"));
+  std::filesystem::remove(invalid);
+  udfLoader->registerUdf();
+  EXPECT_NE(exec::getAggregateFunctionEntry("test.org.apache.spark.sql.MyDoubleAvg"), nullptr);
+}
+
+TEST_F(MyUdfTest, libraryWithoutRegisterUdfIsSkipped) {
+  auto udfLoader = gluten::UdfLoader::getInstance();
+  udfLoader->loadUdfLibraries("../../releases/libvelox.so");
+  EXPECT_NO_THROW(udfLoader->registerUdf());
 }
