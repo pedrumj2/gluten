@@ -16,6 +16,7 @@
  */
 
 #include "SubstraitToVeloxPlanValidator.h"
+#include <folly/String.h>
 #include <google/protobuf/wrappers.pb.h>
 #include <re2/re2.h>
 #include <string>
@@ -57,6 +58,10 @@ const std::unordered_set<std::string> kRegexFunctions =
     {"regexp_extract", "regexp_extract_all", "regexp_replace", "regexp_instr", "rlike", "split"};
 
 const std::unordered_set<std::string> kBlackList = {"split_part", "approx_percentile"};
+
+// Velox's encode accepts these charset names in any case, while Spark 3.x accepts every JDK charset name and alias.
+const std::unordered_set<std::string> kEncodeCharsets =
+    {"us-ascii", "iso-8859-1", "utf-8", "utf-16", "utf-16be", "utf-16le", "utf-32"};
 
 // DATE and the interval types share a TypeKind with the integer types, so compare exact types.
 bool isIntegerType(const TypePtr& type) {
@@ -242,6 +247,24 @@ bool SubstraitToVeloxPlanValidator::validateSequence(
   return true;
 }
 
+bool SubstraitToVeloxPlanValidator::validateEncode(const ::substrait::Expression::ScalarFunction& scalarFunction) {
+  const auto& charsetArg = scalarFunction.arguments()[1].value();
+  if (!charsetArg.has_literal() || !charsetArg.literal().has_string()) {
+    LOG_VALIDATION_MSG(
+        "Function 'encode' is not fully supported. Cause: encode only supports a string literal charset in Velox");
+    return false;
+  }
+  auto charset = charsetArg.literal().string();
+  folly::toLowerAscii(charset);
+  if (kEncodeCharsets.find(charset) == kEncodeCharsets.end()) {
+    LOG_VALIDATION_MSG(
+        "Function 'encode' is not fully supported. Cause: charset '" + charsetArg.literal().string() +
+        "' is not supported in Velox");
+    return false;
+  }
+  return true;
+}
+
 bool SubstraitToVeloxPlanValidator::validateScalarFunction(
     const ::substrait::Expression::ScalarFunction& scalarFunction,
     const RowTypePtr& inputType) {
@@ -267,6 +290,9 @@ bool SubstraitToVeloxPlanValidator::validateScalarFunction(
   }
   if (name == "sequence") {
     return validateSequence(scalarFunction, params);
+  }
+  if (name == "encode") {
+    return validateEncode(scalarFunction);
   }
 
   // Validate regex functions.

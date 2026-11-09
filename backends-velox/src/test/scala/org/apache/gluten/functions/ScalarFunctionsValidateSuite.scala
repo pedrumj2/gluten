@@ -857,6 +857,42 @@ class ScalarFunctionsValidateSuite extends FunctionsValidateSuite {
     }
   }
 
+  // Spark 4.0 replaces encode with a StaticInvoke, which is not offloaded.
+  testWithMaxSparkVersion("encode with standard charsets", "3.5") {
+    withTempPath {
+      path =>
+        val emoji = new String(Character.toChars(0x1f600))
+        Seq(s"caf${0xe9.toChar}", s"${0x20ac.toChar} $emoji", "", null)
+          .toDF("a")
+          .write
+          .parquet(path.getCanonicalPath)
+        spark.read.parquet(path.getCanonicalPath).createOrReplaceTempView("encode_tbl")
+        runQueryAndCompare(
+          "SELECT encode(a, 'UTF-8'), encode(a, 'utf-16'), encode(a, 'US-ASCII'), " +
+            "encode(a, 'ISO-8859-1') FROM encode_tbl") {
+          checkGlutenPlan[ProjectExecTransformer]
+        }
+    }
+  }
+
+  testWithMaxSparkVersion("encode with other charsets or a non-literal charset falls back", "3.5") {
+    withTempPath {
+      path =>
+        Seq((s"caf${0xe9.toChar}", "UTF-8"))
+          .toDF("a", "charset")
+          .write
+          .parquet(path.getCanonicalPath)
+        spark.read.parquet(path.getCanonicalPath).createOrReplaceTempView("encode_tbl")
+        def checkEncodeFallsBack(df: DataFrame): Unit = {
+          checkSparkPlan[ProjectExec](df)
+          assert(fallbackReasons(df).exists(_.contains("Function 'encode' is not fully supported")))
+        }
+        runQueryAndCompare("SELECT encode(a, 'utf8') FROM encode_tbl")(checkEncodeFallsBack)
+        runQueryAndCompare("SELECT encode(a, 'GBK') FROM encode_tbl")(checkEncodeFallsBack)
+        runQueryAndCompare("SELECT encode(a, charset) FROM encode_tbl")(checkEncodeFallsBack)
+    }
+  }
+
   // Add test suite for CharVarcharCodegenUtils functions.
   // A ProjectExecTransformer is expected to be constructed after expr support.
   test("charTypeWriteSideCheck") {

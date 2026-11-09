@@ -165,6 +165,9 @@ class SubstraitToVeloxPlanValidator {
       const ::substrait::Expression::ScalarFunction& scalarFunction,
       const std::vector<core::TypedExprPtr>& params);
 
+  /// Validate encode function. Only a string literal charset that Velox's encode accepts is supported.
+  bool validateEncode(const ::substrait::Expression::ScalarFunction& scalarFunction);
+
   /// Validate Substrait scarlar function.
   bool validateScalarFunction(
       const ::substrait::Expression::ScalarFunction& scalarFunction,

@@ -21,6 +21,7 @@ import org.apache.gluten.shuffle.SupportsColumnarShuffle
 
 import org.apache.spark.network.util.{ByteUnit, JavaUtils}
 import org.apache.spark.sql.internal.{GlutenConfigUtil, SQLConf}
+import org.apache.spark.util.SparkVersionUtil
 
 import org.apache.hadoop.security.UserGroupInformation
 
@@ -499,6 +500,7 @@ object GlutenConfig extends ConfigRegistry {
   val SPARK_SHUFFLE_SPILL_COMPRESS = "spark.shuffle.spill.compress"
   val SPARK_SHUFFLE_SPILL_COMPRESS_DEFAULT: Boolean = true
   val SPARK_MAX_BROADCAST_TABLE_SIZE = "spark.sql.maxBroadcastTableSize"
+  val SPARK_LEGACY_CODING_ERROR_ACTION = "spark.sql.legacy.codingErrorAction"
 
   def get: GlutenConfig = {
     new GlutenConfig(GlutenCoreConfig.activeSQLConf)
@@ -595,6 +597,12 @@ object GlutenConfig extends ConfigRegistry {
       (SQLConf.SESSION_LOCAL_TIMEZONE.key, SQLConf.SESSION_LOCAL_TIMEZONE.defaultValueString),
       (SQLConf.ANSI_ENABLED.key, SQLConf.ANSI_ENABLED.defaultValueString)
     ).foreach { case (k, defaultValue) => nativeConfMap.put(k, conf.getOrElse(k, defaultValue)) }
+
+    // Spark 3.x encode always replaces characters the charset cannot represent, which Spark 4.0
+    // does only when this flag is set.
+    if (!SparkVersionUtil.gteSpark40) {
+      nativeConfMap.put(SPARK_LEGACY_CODING_ERROR_ACTION, "true")
+    }
 
     Seq(
       (SPARK_UNSAFE_SORTER_SPILL_READER_BUFFER_SIZE, ByteUnit.BYTE, (v: Long) => v.toString),
