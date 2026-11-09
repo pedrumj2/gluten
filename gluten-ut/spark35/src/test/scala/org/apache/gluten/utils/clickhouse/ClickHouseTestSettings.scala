@@ -1060,7 +1060,6 @@ class ClickHouseTestSettings extends BackendTestSettings {
     .excludeCH(
       "Gluten - Do not fallback write files if output columns contain Spark internal metadata")
     .excludeCH("Gluten - Add metadata white list to allow native write files")
-    .excludeCH("Gluten - INSERT rows, ALTER TABLE ADD COLUMNS with DEFAULTs, then SELECT them")
   enableSuite[GlutenIntervalExpressionsSuite]
   enableSuite[GlutenIntervalFunctionsSuite]
   enableSuite[GlutenJoinSuite]

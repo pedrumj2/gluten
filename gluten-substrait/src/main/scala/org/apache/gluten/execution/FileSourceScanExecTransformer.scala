@@ -206,6 +206,12 @@ abstract class FileSourceScanExecTransformerBase(
         s"Unsupported matching schema column names " +
           s"by field ids in native scan.")
     }
+
+    if (hasExistenceDefaultValues) {
+      // For a file that lacks a column with an existence default, such as one added by
+      // ALTER TABLE ADD COLUMN ... DEFAULT, Spark reads the default and the native scan reads null.
+      return ValidationResult.failed("Unsupported existence default values in native scan.")
+    }
     if (fileFormat == ReadFileFormat.TextReadFormat) {
       csvFieldDelimiter match {
         case Some(d) if isSingleAscii(d) =>
