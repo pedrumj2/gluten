@@ -27,7 +27,7 @@ import org.apache.spark.util.Utils
 import org.apache.hadoop.fs.Path
 import org.apache.parquet.hadoop.ParquetFileReader
 import org.apache.parquet.hadoop.util.HadoopInputFile
-import org.apache.parquet.schema.PrimitiveType
+import org.apache.parquet.schema.{LogicalTypeAnnotation, PrimitiveType, Types}
 
 import java.io.File
 
@@ -108,6 +108,55 @@ class VeloxParquetWriteSuite extends VeloxWholeStageTransformerSuite with WriteU
             }
           }
       }
+  }
+
+  test("test write parquet timestamp with outputTimestampType") {
+    val int96 = Types.optional(PrimitiveType.PrimitiveTypeName.INT96).named("value")
+    def int64(unit: LogicalTypeAnnotation.TimeUnit): PrimitiveType = Types
+      .optional(PrimitiveType.PrimitiveTypeName.INT64)
+      .as(LogicalTypeAnnotation.timestampType(true, unit))
+      .named("value")
+    Seq(
+      (None, int96, "2024-01-01 00:00:00.123456"),
+      (Some("INT96"), int96, "2024-01-01 00:00:00.123456"),
+      (
+        Some("TIMESTAMP_MICROS"),
+        int64(LogicalTypeAnnotation.TimeUnit.MICROS),
+        "2024-01-01 00:00:00.123456"),
+      (
+        Some("TIMESTAMP_MILLIS"),
+        int64(LogicalTypeAnnotation.TimeUnit.MILLIS),
+        "2024-01-01 00:00:00.123")
+    ).foreach {
+      case (outputTimestampType, expectedType, expectedValue) =>
+        val confs = outputTimestampType.map(SQLConf.PARQUET_OUTPUT_TIMESTAMP_TYPE.key -> _).toSeq :+
+          (SQLConf.SESSION_LOCAL_TIMEZONE.key -> "America/Los_Angeles")
+        withSQLConf(confs: _*) {
+          withTempPath {
+            f =>
+              val path = f.getCanonicalPath
+              checkNativeWrite(
+                s"INSERT OVERWRITE DIRECTORY '$path' USING PARQUET " +
+                  "SELECT TIMESTAMP '2024-01-01 00:00:00.123456' AS value")
+              val parquetFiles = f.list((_, name) => name.contains("parquet"))
+              assert(parquetFiles.nonEmpty)
+              parquetFiles.foreach {
+                file =>
+                  val filePath = new Path(path, file)
+                  val in = HadoopInputFile.fromPath(filePath, spark.sessionState.newHadoopConf())
+                  Utils.tryWithResource(ParquetFileReader.open(in)) {
+                    reader =>
+                      assert(reader.getFooter.getFileMetaData.getSchema.getType(0) == expectedType)
+                  }
+              }
+              val expected = spark.sql(s"SELECT TIMESTAMP '$expectedValue' AS value")
+              checkAnswer(spark.read.parquet(path), expected)
+              withSQLConf(GlutenConfig.GLUTEN_ENABLED.key -> "false") {
+                checkAnswer(spark.read.parquet(path), expected)
+              }
+          }
+        }
+    }
   }
 
   test("test write parquet with compression codec") {

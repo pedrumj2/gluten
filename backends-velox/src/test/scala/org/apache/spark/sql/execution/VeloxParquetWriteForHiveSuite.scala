@@ -34,6 +34,7 @@ import org.apache.spark.util.Utils
 import org.apache.hadoop.fs.Path
 import org.apache.parquet.hadoop.ParquetFileReader
 import org.apache.parquet.hadoop.util.HadoopInputFile
+import org.apache.parquet.schema.{PrimitiveType, Type, Types}
 
 import java.io.File
 
@@ -196,6 +197,38 @@ class VeloxParquetWriteForHiveSuite extends GlutenQueryTest with SQLTestUtils wi
         checkNativeWrite("INSERT OVERWRITE TABLE t SELECT 1 as c")
       }
       checkAnswer(spark.table("t"), Row(1))
+    }
+  }
+
+  test("test hive write stores timestamps as INT96") {
+    val expectedType = Types.optional(PrimitiveType.PrimitiveTypeName.INT96).named("ts")
+    withTable("t_micros", "t_millis") {
+      Seq("t_micros" -> "TIMESTAMP_MICROS", "t_millis" -> "TIMESTAMP_MILLIS").foreach {
+        case (table, outputTimestampType) =>
+          spark.sql(s"CREATE TABLE $table (ts TIMESTAMP) STORED AS PARQUET")
+          withSQLConf(
+            "spark.sql.hive.convertMetastoreParquet" -> "false",
+            SQLConf.PARQUET_OUTPUT_TIMESTAMP_TYPE.key -> outputTimestampType) {
+            checkNativeWrite(
+              s"INSERT OVERWRITE TABLE $table SELECT TIMESTAMP '2024-01-01 00:00:00.123456'")
+            checkAnswer(
+              spark.table(table),
+              spark.sql("SELECT TIMESTAMP '2024-01-01 00:00:00.123456'"))
+          }
+          assert(timestampType(table) == expectedType)
+      }
+    }
+  }
+
+  private def timestampType(table: String): Type = {
+    val file = tableDir(table)
+      .listFiles()
+      .filterNot(f => f.getName.startsWith(".") || f.getName.startsWith("_"))
+      .head
+    val path = new Path(file.getAbsolutePath)
+    val in = HadoopInputFile.fromPath(path, spark.sessionState.newHadoopConf())
+    Utils.tryWithResource(ParquetFileReader.open(in)) {
+      reader => reader.getFooter.getFileMetaData.getSchema.getType(0)
     }
   }
 
