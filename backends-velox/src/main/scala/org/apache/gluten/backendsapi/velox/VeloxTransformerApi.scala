@@ -36,8 +36,10 @@ import org.apache.spark.sql.catalyst.util.CaseInsensitiveMap
 import org.apache.spark.sql.execution.datasources.{HadoopFsRelation, PartitionDirectory}
 import org.apache.spark.sql.execution.datasources.parquet.ParquetFileFormat
 import org.apache.spark.sql.hive.execution.HiveFileFormat
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
 import org.apache.spark.task.TaskResources
+import org.apache.spark.util.SparkVersionUtil
 import org.apache.spark.util.collection.BitSet
 
 import com.google.protobuf.{Any, Message}
@@ -197,10 +199,12 @@ class VeloxTransformerApi extends TransformerApi with Logging {
             CaseInsensitiveMap(hadoopConf.iterator().asScala.map(
               entry => entry.getKey -> entry.getValue).toMap)
         }.getOrElse(write.caseInsensitiveOptions)
+        val formatOptions = writeOptions +
+          (SQLConf.PARQUET_OUTPUT_TIMESTAMP_TYPE.key -> outputTimestampType(write, writeOptions))
         val nativeConf =
           GlutenFormatFactory(shortName)
             .nativeConf(
-              writeOptions,
+              formatOptions,
               WriteFilesExecTransformer.getCompressionCodec(writeOptions))
         packPBMessage(
           ConfigMap
@@ -211,5 +215,23 @@ class VeloxTransformerApi extends TransformerApi with Logging {
       case _ =>
         throw new GlutenException("Unsupported file write format: " + write.fileFormat)
     }
+  }
+
+  /**
+   * Spark's Hive SerDe writes timestamps as INT96 whatever spark.sql.parquet.outputTimestampType
+   * says. Its Parquet data source takes the session's setting, and from Spark 4.2 a value already
+   * in the write's Hadoop conf wins.
+   */
+  private def outputTimestampType(
+      write: WriteFilesExecTransformer,
+      writeOptions: Map[String, String]): String = write.fileFormat match {
+    case _: HiveFileFormat => SQLConf.ParquetOutputTimestampType.INT96.toString
+    case _ =>
+      val sessionType = SQLConf.get.parquetOutputTimestampType.toString
+      if (SparkVersionUtil.gteSpark42) {
+        writeOptions.getOrElse(SQLConf.PARQUET_OUTPUT_TIMESTAMP_TYPE.key, sessionType)
+      } else {
+        sessionType
+      }
   }
 }

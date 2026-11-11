@@ -25,6 +25,7 @@
 
 #include "memory/VeloxMemoryManager.h"
 #include "velox/common/compression/Compression.h"
+#include "velox/dwio/parquet/common/ParquetConfig.h"
 #include "velox/type/Type.h"
 
 namespace gluten {
@@ -63,6 +64,17 @@ std::shared_ptr<facebook::velox::dwio::common::WriterOptions> makeParquetWriteOp
   auto writeOption = std::make_shared<facebook::velox::dwio::common::WriterOptions>();
   auto parquetOptions = std::make_shared<ParquetWriterOptions>();
   parquetOptions->parquetWriteTimestampUnit = TimestampPrecision::kMicroseconds /*micro*/;
+  if (auto it = sparkConfs.find(kParquetOutputTimestampType); it != sparkConfs.end()) {
+    if (boost::iequals(it->second, "INT96")) {
+      parquetOptions->writeInt96AsTimestamp = true;
+    } else if (boost::iequals(it->second, "TIMESTAMP_MILLIS")) {
+      // createHiveConnectorSessionConfig sets the writer timestamp unit to microseconds, and Velox's
+      // HiveDataSink applies it over parquetWriteTimestampUnit. Velox's writer prefers this serde
+      // parameter to both.
+      writeOption->serdeParameters[std::string(ParquetConfig::kWriterSerdeTimestampUnit)] =
+          std::to_string(static_cast<int>(TimestampPrecision::kMilliseconds));
+    }
+  }
   bool writeLegacyParquetFormat = false;
   if (auto it = sparkConfs.find(kParquetStoreDecimalAsInteger); it != sparkConfs.end()) {
     writeLegacyParquetFormat = boost::iequals(it->second, "true");

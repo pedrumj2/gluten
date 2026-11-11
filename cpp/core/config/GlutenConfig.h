@@ -78,6 +78,8 @@ const std::string kParquetWriterVersion = "parquet.writer.version";
 
 const std::string kParquetCompressionCodec = "spark.sql.parquet.compression.codec";
 
+const std::string kParquetOutputTimestampType = "spark.sql.parquet.outputTimestampType";
+
 const std::string kLegacyParquetReturnNullStructIfAllFieldsMissing =
     "spark.sql.legacy.parquet.returnNullStructIfAllFieldsMissing";
 
