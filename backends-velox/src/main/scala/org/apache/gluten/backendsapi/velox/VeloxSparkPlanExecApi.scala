@@ -28,7 +28,7 @@ import org.apache.gluten.shuffle.NeedCustomColumnarBatchSerializer
 import org.apache.gluten.sql.shims.SparkShimLoader
 import org.apache.gluten.substrait.SubstraitContext
 import org.apache.gluten.substrait.expression.{ExpressionBuilder, ExpressionNode, WindowFunctionNode}
-import org.apache.gluten.utils.VeloxIntermediateData
+import org.apache.gluten.utils.{ExceptionUtils, VeloxIntermediateData}
 import org.apache.gluten.vectorized.{ColumnarBatchSerializer, ColumnarBatchSerializeResult}
 
 import org.apache.spark.{ShuffleDependency, SparkEnv}
@@ -1432,6 +1432,18 @@ class VeloxSparkPlanExecApi extends SparkPlanExecApi with Logging {
             ExpressionConverter.replaceWithExpressionTransformer(rf.child, attributeSeq),
             rf,
             rf.scale))
+      case a: AssertNotNull =>
+        // Velox fails with this message, from which ColumnarBatchOutIterator reads the walked type
+        // path back to throw Spark's exception.
+        val message =
+          ExceptionUtils.notNullAssertViolationMessage(a.walkedTypePath.mkString("\n", "\n", "\n"))
+        Some(
+          GenericExpressionTransformer(
+            substraitExprName,
+            Seq(
+              ExpressionConverter.replaceWithExpressionTransformer(a.child, attributeSeq),
+              LiteralTransformer(message)),
+            a))
       case _ => None
     }
   }

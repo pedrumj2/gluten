@@ -18,6 +18,7 @@ package org.apache.gluten.sql.shims
 
 import org.apache.gluten.GlutenBuildInfo.SPARK_COMPILE_VERSION
 import org.apache.gluten.expression.Sig
+import org.apache.gluten.utils.ExceptionUtils
 
 import org.apache.spark.{SparkContext, SparkException}
 import org.apache.spark.sql.{AnalysisException, SparkSession}
@@ -264,4 +265,16 @@ trait SparkShims {
 
   def getShuffleBlockFetcherIterator(params: ShuffleBlockFetcherIteratorParams)
       : GlutenShuffleBlockFetcherIteratorBase
+
+  /**
+   * Returns the exception Spark's AssertNotNull throws for a null value, with `cause` attached.
+   * `walkedTypePath` is the expression's walked type path joined the way AssertNotNull joins it.
+   * Spark 4 replaced Spark 3's NullPointerException with NOT_NULL_ASSERT_VIOLATION.
+   */
+  def notNullAssertViolation(walkedTypePath: String, cause: Throwable): RuntimeException = {
+    val exception =
+      new NullPointerException(ExceptionUtils.notNullAssertViolationMessage(walkedTypePath))
+    exception.initCause(cause)
+    exception
+  }
 }

@@ -29,6 +29,28 @@ object ExceptionUtils {
       messageParameters = Map("path" -> path),
       cause = null)
 
+  // Spark 3's AssertNotNull message names the walked type path between these two parts.
+  private val NotNullAssertViolationStart = "Null value appeared in non-nullable field:"
+  private val NotNullAssertViolationEnd =
+    "If the schema is inferred from a Scala tuple/case class, or a Java bean, " +
+      "please try to use scala.Option[_] or other nullable types " +
+      "(e.g. java.lang.Integer instead of int/scala.Int)."
+
+  /**
+   * Returns the message Spark 3's AssertNotNull fails with, where `walkedTypePath` is the
+   * expression's walked type path joined the way AssertNotNull joins it.
+   */
+  def notNullAssertViolationMessage(walkedTypePath: String): String =
+    NotNullAssertViolationStart + walkedTypePath + NotNullAssertViolationEnd
+
+  /** Returns the walked type path of the first [[notNullAssertViolationMessage]] in `text`. */
+  def notNullAssertViolationPath(text: String): Option[String] = {
+    val start = text.indexOf(NotNullAssertViolationStart)
+    val pathStart = start + NotNullAssertViolationStart.length
+    val pathEnd = if (start < 0) -1 else text.indexOf(NotNullAssertViolationEnd, pathStart)
+    if (pathEnd < 0) None else Some(text.substring(pathStart, pathEnd))
+  }
+
   /**
    * Utility to check the exception for the specified type.
    *
