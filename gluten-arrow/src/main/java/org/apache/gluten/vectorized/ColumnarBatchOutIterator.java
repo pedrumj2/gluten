@@ -21,11 +21,15 @@ import org.apache.gluten.exception.GlutenException;
 import org.apache.gluten.iterator.ClosableIterator;
 import org.apache.gluten.runtime.Runtime;
 import org.apache.gluten.runtime.RuntimeAware;
+import org.apache.gluten.sql.shims.SparkShimLoader;
+import org.apache.gluten.utils.ExceptionUtils;
 
 import org.apache.spark.sql.execution.datasources.SchemaColumnConvertNotSupportedException;
 import org.apache.spark.sql.vectorized.ColumnarBatch;
 
 import java.io.IOException;
+
+import scala.Option;
 
 public class ColumnarBatchOutIterator extends ClosableIterator<ColumnarBatch>
     implements RuntimeAware {
@@ -143,6 +147,18 @@ public class ColumnarBatchOutIterator extends ClosableIterator<ColumnarBatch>
     return null;
   }
 
+  /**
+   * Translates the error Velox raises for a null in assert_not_null into the exception Spark's
+   * AssertNotNull throws. Returns null if the message does not carry a walked type path.
+   */
+  private static RuntimeException translateToNotNullAssertViolation(String msg, Exception e) {
+    Option<String> walkedTypePath = ExceptionUtils.notNullAssertViolationPath(msg);
+    if (walkedTypePath.isEmpty()) {
+      return null;
+    }
+    return SparkShimLoader.getSparkShims().notNullAssertViolation(walkedTypePath.get(), e);
+  }
+
   @Override
   protected RuntimeException translateException(Exception e) {
     String msg = findFirstNonNullMessage(e);
@@ -151,6 +167,10 @@ public class ColumnarBatchOutIterator extends ClosableIterator<ColumnarBatch>
       if (schemaEx != null) {
         schemaEx.initCause(e);
         return schemaEx;
+      }
+      RuntimeException notNullEx = translateToNotNullAssertViolation(msg, e);
+      if (notNullEx != null) {
+        return notNullEx;
       }
     }
     return new GlutenException(e);

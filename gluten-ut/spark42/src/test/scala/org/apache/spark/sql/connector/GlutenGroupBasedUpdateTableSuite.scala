@@ -20,20 +20,4 @@ import org.apache.spark.sql.GlutenSQLTestsTrait
 
 class GlutenGroupBasedUpdateTableSuite
   extends GroupBasedUpdateTableSuite
-  with GlutenSQLTestsTrait
-  with GlutenUpdateTableSuiteBase {
-
-  testGluten("update with NOT NULL checks") {
-    createAndInitTable(
-      "pk INT NOT NULL, s STRUCT<n_i: INT NOT NULL, n_l: LONG>, dep STRING",
-      """{ "pk": 1, "s": { "n_i": 1, "n_l": 11 }, "dep": "hr" }
-        |{ "pk": 2, "s": { "n_i": 2, "n_l": 22 }, "dep": "software" }
-        |{ "pk": 3, "s": { "n_i": 3, "n_l": 33 }, "dep": "hr" }
-        |""".stripMargin
-    )
-
-    assertNotNullViolation {
-      sql(s"UPDATE $tableNameAsString SET s = named_struct('n_i', null, 'n_l', -1L) WHERE pk = 1")
-    }
-  }
-}
+  with GlutenSQLTestsTrait {}
