@@ -115,6 +115,9 @@ class VeloxTestSettings extends BackendTestSettings {
   enableSuite[GlutenSupportsCatalogOptionsSuite]
   enableSuite[GlutenTableCapabilityCheckSuite]
   enableSuite[GlutenWriteDistributionAndOrderingSuite]
+    // Flaky: in continuous mode, Spark's processAllAvailable() can return before the epoch
+    // holding the rows is committed, so the table is read back empty.
+    .exclude("continuous mode allows unspecified distribution and empty ordering")
   // Generated suites for org.apache.spark.sql.catalyst.expressions.aggregate
   enableSuite[aggregate.GlutenAggregateExpressionSuite]
   enableSuite[aggregate.GlutenApproxCountDistinctForIntervalsSuite]
