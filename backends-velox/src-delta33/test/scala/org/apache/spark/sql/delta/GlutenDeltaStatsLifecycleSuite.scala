@@ -102,11 +102,16 @@ class GlutenDeltaStatsLifecycleSuite extends GlutenQueryTest with SharedSparkSes
           plan.exists(_.isInstanceOf[HashAggregateExecTransformer]),
           s"Expected a native statistics aggregate, but got:\n${plan.treeString}")
     }
+    awaitStatisticsCleanup(before, completionChecks)
+  }
+
+  private def awaitStatisticsCleanup(
+      before: Set[Long],
+      completionChecks: ConcurrentLinkedQueue[() => Unit]): Unit =
     eventually(timeout(15.seconds), interval(100.millis)) {
       completionChecks.asScala.foreach(_())
       assert(statisticsThreads.diff(before).isEmpty, "Statistics workers survived task completion")
     }
-  }
 
   test("aborted Delta writes close native statistics before task runtimes") {
     withTempDir {
@@ -119,7 +124,8 @@ class GlutenDeltaStatsLifecycleSuite extends GlutenQueryTest with SharedSparkSes
         val invalid = spark.createDataFrame(Seq(Row(1L), Row(null)).asJava, schema.asNullable)
         withNativeStatistics(path) {
           val failure = intercept[Exception] {
-            invalid.write.format("delta").mode("append").save(path)
+            // Only partition 0 builds its statistics tracker before reading its first row.
+            invalid.coalesce(1).write.format("delta").mode("append").save(path)
           }
           assert(
             Iterator.iterate[Throwable](failure)(_.getCause).takeWhile(_ != null)
@@ -291,8 +297,7 @@ class GlutenDeltaStatsLifecycleSuite extends GlutenQueryTest with SharedSparkSes
       }
       assert(!thread.isAlive, "Statistics cleanup did not terminate")
       failures.asScala.foreach(e => throw e)
-      completionChecks.asScala.foreach(_())
-      assert(statisticsThreads.diff(before).isEmpty, "Statistics workers survived task completion")
+      awaitStatisticsCleanup(before, completionChecks)
     }
   }
 
@@ -400,8 +405,7 @@ class GlutenDeltaStatsLifecycleSuite extends GlutenQueryTest with SharedSparkSes
     }
     assert(!thread.isAlive, "Statistics cleanup did not terminate")
     failures.asScala.foreach(e => throw e)
-    completionChecks.asScala.foreach(_())
-    assert(statisticsThreads.diff(before).isEmpty, "Statistics workers survived task completion")
+    awaitStatisticsCleanup(before, completionChecks)
   }
 
   test("canceled statistics workers can access task resources before cleanup") {
